@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "allowJs": true,
+    "isolatedModules": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["services/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

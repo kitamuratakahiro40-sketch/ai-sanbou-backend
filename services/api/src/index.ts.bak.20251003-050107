@@ -1,0 +1,157 @@
+import express from 'express';
+import bodyParser from 'body-parser';
+import { query } from './db.js';
+import { downloadToTmp, ffprobeDurationSeconds } from './util.js';
+import { planChunks } from './chunk.js';
+import { CloudTasksClient } from '@google-cloud/tasks';
+import crypto from 'crypto';
+import { Storage } from '@google-cloud/storage';
+
+
+const app = express();
+app.use(bodyParser.json());
+
+const BUCKET_NAME = process.env.BUCKET_NAME!;
+const SIGNED_URL_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS ?? 900);
+if (!BUCKET_NAME) throw new Error('Env BUCKET_NAME is required for /uploads');
+const storage = new Storage();
+const bucket = storage.bucket(BUCKET_NAME);
+const SAFE_NAME_RE = /^[a-zA-Z0-9._\-\/]{1,200}$/;
+const hasDotDot = (p: string) => p.includes('..');
+
+const PROJECT_ID = process.env.PROJECT_ID!;
+const TASKS_LOCATION = process.env.TASKS_LOCATION || 'asia-southeast1';
+const TASKS_QUEUE = process.env.TASKS_QUEUE || 'longscribe-queue';
+const WORKER_URL = process.env.WORKER_URL!; // e.g. https://worker-xxxx.a.run.app/tasks/transcribe
+const TASKS_SA_EMAIL = process.env.TASKS_SA_EMAIL!; // OIDC for Cloud Tasks -> Worker
+
+const tasksClient = new CloudTasksClient();
+
+
+
+
+
+function newJobId() {
+  return crypto.randomUUID();
+}
+
+// POST /jobs  { gcsUri: "gs://bucket/path/file.mp3", sliceSec?: 600 }
+app.post('/jobs', async (req, res) => {
+  try {
+    const { gcsUri, sliceSec = 600 } = req.body || {};
+    if (!gcsUri || typeof gcsUri !== 'string' || !gcsUri.startsWith('gs://')) {
+      return res.status(400).json({ error: 'gcsUri required (gs://...)' });
+    }
+
+    // 1) ダウンロードして ffprobe で長さ取得
+    const local = await downloadToTmp(gcsUri);
+    const durationSec = Math.ceil(await ffprobeDurationSeconds(local));
+    if (!durationSec || durationSec <= 0) {
+      return res.status(400).json({ error: 'failed to detect duration' });
+    }
+
+    const plan = planChunks(durationSec, sliceSec, 2);
+    const jobId = newJobId();
+
+    // 2) DB: jobs 作成
+    await query(
+      `INSERT INTO jobs(id, source_uri, duration_sec, chunk_sec, total_chunks, status) VALUES ($1::text, $2::text, $3::int, $4::int, $5::int, 'PROCESSING')`,
+      [jobId, gcsUri, durationSec, sliceSec, plan.total]
+    );
+
+    // 3) DB: chunks プレースホルダ作成（安全版：1行ずつ）
+for (const it of plan.items) {
+  await query(
+    `INSERT INTO chunks (job_id, idx, start_sec, end_sec, status)
+     VALUES (::text, ::int, ::int, ::int, 'PENDING')`,
+    [jobId, it.idx, it.start, it.end]
+  );
+}
+
+// 4) Cloud Tasks へ投入
+    const parent = tasksClient.queuePath(PROJECT_ID, TASKS_LOCATION, TASKS_QUEUE);
+
+    for (const it of plan.items) {
+      const payload = {
+        jobId,
+        gcsUri,
+        idx: it.idx,
+        startSec: it.start,
+        endSec: it.end,
+      };
+
+      await tasksClient.createTask({
+        parent,
+        task: {
+          httpRequest: {
+            httpMethod: 'POST',
+            url: WORKER_URL,
+            headers: { 'Content-Type': 'application/json' },
+            body: Buffer.from(JSON.stringify(payload)).toString('base64'),
+            oidcToken: {
+              serviceAccountEmail: TASKS_SA_EMAIL,
+              audience: WORKER_URL,
+            },
+          },
+        },
+      });
+    }
+
+    return res.json({ jobId, durationSec, totalChunks: plan.total, status: 'PROCESSING' });
+  } catch (e: any) {
+    console.error(e);
+    return res.status(500).json({ error: e?.message || 'internal error' });
+  }
+});
+// POST /uploads  { fileName, contentType? } => 署名付きPUT URLを返す
+app.post('/uploads', async (req, res) => {
+  try {
+    const { fileName, contentType } = req.body ?? {};
+    if (!fileName || typeof fileName !== 'string') return res.status(400).json({ error: 'fileName is required' });
+    if (!SAFE_NAME_RE.test(fileName) || hasDotDot(fileName)) return res.status(400).json({ error: 'invalid fileName' });
+
+    const ct = contentType && typeof contentType === 'string' ? contentType : 'application/octet-stream';
+    const expires = Date.now() + SIGNED_URL_TTL_SECONDS * 1000;
+    const file = bucket.file(fileName);
+
+    const [uploadUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires,
+      contentType: ct,
+    });
+
+    return res.status(200).json({
+      objectName: fileName,
+      bucket: BUCKET_NAME,
+      method: 'PUT',
+      uploadUrl,
+      headers: { 'Content-Type': ct },
+      expiresAt: new Date(expires).toISOString(),
+      objectUrl: `https://storage.googleapis.com/${encodeURIComponent(BUCKET_NAME)}/${encodeURIComponent(fileName)}`
+    });
+  } catch (e) {
+    console.error('[/uploads] error:', e);
+    return res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// GET /jobs/:id
+app.get('/jobs/:id', async (req, res) => {
+  const { id } = req.params;
+  const j = await query(`SELECT id, status, total_chunks, duration_sec, chunk_sec, created_at, updated_at FROM jobs WHERE id=$1`, [id]);
+  if (!j.rows[0]) return res.status(404).json({ error: 'not found' });
+  const c = await query(`SELECT status, count(*) FROM chunks WHERE job_id=$1 GROUP BY status`, [id]);
+  return res.json({ job: j.rows[0], chunkSummary: c.rows });
+});
+
+// GET /transcripts/:id
+app.get('/transcripts/:id', async (req, res) => {
+  const { id } = req.params;
+  const t = await query(`SELECT text FROM transcripts WHERE job_id=$1`, [id]);
+  if (!t.rows[0]) return res.status(404).json({ error: 'not ready' });
+  res.type('text/plain; charset=utf-8').send(t.rows[0].text);
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`API listening on :${PORT}`));

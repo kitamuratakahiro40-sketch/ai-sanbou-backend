@@ -1,0 +1,5 @@
+node_modules
+npm-debug.log
+Dockerfile
+.tsconfig.json
+**/.DS_Store
