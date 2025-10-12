@@ -1,0 +1,389 @@
+diff --git a/tsconfig.json b/tsconfig.json
+new file mode 100644
+index 0000000..e48a313
+--- /dev/null
++++ b/tsconfig.json
+@@ -0,0 +1,24 @@
++{
++  "compilerOptions": {
++    "target": "es2020",
++    "module": "commonjs",
++    "moduleResolution": "node",
++    "esModuleInterop": true,
++    "forceConsistentCasingInFileNames": true,
++    "skipLibCheck": true,
++    "strict": false,
++    "resolveJsonModule": true,
++    "outDir": "dist",
++    "allowJs": true,
++    "isolatedModules": false,
++    "noEmit": true,
++    "verbatimModuleSyntax": false
++  },
++  "include": ["services/**/*", "scripts/**/*"],
++  "exclude": ["node_modules", "dist"]
++}
+diff --git a/services/api/src/db.ts b/services/api/src/db.ts
+--- a/services/api/src/db.ts
++++ b/services/api/src/db.ts
+@@ -1,70 +1,86 @@
+-import { Pool, PoolClient, QueryConfig, QueryResult } from "pg";
++import { Pool, QueryResult } from "pg";
++import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
+ 
+ const {
+   DATABASE_URL,
+   PGHOST,
+   PGPORT,
+   PGUSER,
+   PGPASSWORD,
+   PGDATABASE,
+   PGSSLMODE,
++  PG_POOL_MAX
+ } = process.env;
+ 
+ declare global {
+   // eslint-disable-next-line no-var
+   var __GLOBAL_PG_POOL__: Pool | undefined;
+ }
+ 
+-function createPool(): Pool {
++const createPool = (): Pool => {
+   if (DATABASE_URL) {
+     return new Pool({
+       connectionString: DATABASE_URL,
+       ssl: PGSSLMODE === "require" ? { rejectUnauthorized: false } : undefined,
++      max: PG_POOL_MAX ? Number(PG_POOL_MAX) : 10,
+     });
+   }
+   return new Pool({
+     host: PGHOST,
+     port: PGPORT ? Number(PGPORT) : 5432,
+     user: PGUSER,
+     password: PGPASSWORD,
+     database: PGDATABASE,
+     ssl: PGSSLMODE === "require" ? { rejectUnauthorized: false } : undefined,
++    max: PG_POOL_MAX ? Number(PG_POOL_MAX) : 10,
+   });
+-}
++};
+ 
+ const pool: Pool = globalThis.__GLOBAL_PG_POOL__ ?? createPool();
+ if (process.env.NODE_ENV !== "production") {
+   globalThis.__GLOBAL_PG_POOL__ = pool;
+ }
+ 
+-export async function query<T = any>(
+-  text: string | QueryConfig,
+-  params?: any[],
+-  opts?: { retries?: number; retryDelayMs?: number }
+-): Promise<QueryResult<T>> {
++export async function query<T extends QueryResultRow = QueryResultRow>(
++  text: string | QueryConfig,
++  params?: any[],
++  opts?: { retries?: number; retryDelayMs?: number }
++): Promise<QueryResult<T>> {
+   const retries = opts?.retries ?? 1;
+   const retryDelayMs = opts?.retryDelayMs ?? 200;
+ 
+   for (let attempt = 0; attempt <= retries; attempt++) {
+     try {
+-      if (typeof text === "string") {
+-        return await pool.query<T>(text, params);
+-      } else {
+-        return await pool.query<T>(text);
+-      }
++      if (typeof text === "string") {
++        return await pool.query<T>(text, params as any);
++      } else {
++        return await pool.query<T>(text as QueryConfig);
++      }
+     } catch (err) {
+       const isLast = attempt === retries;
+-      // 遷移的なエラーなら再試行、それ以外は即投げる
+       if (!isLast) {
+         // eslint-disable-next-line no-console
+         console.warn(`DB query failed (attempt ${attempt + 1}), retrying after ${retryDelayMs}ms`, err);
+         await new Promise((r) => setTimeout(r, retryDelayMs));
+         continue;
+       }
+       throw err;
+     }
+   }
+-  // ここには到達しない
+   throw new Error("unreachable");
+ }
+ 
+ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+@@ -82,21 +98,22 @@
+   }
+ }
+ 
+ export async function shutdownPool(): Promise<void> {
+   try {
+     // eslint-disable-next-line no-console
+     console.info("Shutting down DB pool...");
+     await pool.end();
+     globalThis.__GLOBAL_PG_POOL__ = undefined;
+   } catch (e) {
+     // eslint-disable-next-line no-console
+     console.error("Error shutting down DB pool", e);
+   }
+ }
+ 
+-// SIGTERM 等で graceful shutdown を行う（Cloud Run が SIGTERM を送る）
++export function getPool(): Pool {
++  return pool;
++}
++
+ if (typeof process !== "undefined") {
+   const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
+   signals.forEach((signal) => {
+diff --git a/services/worker/src/db.ts b/services/worker/src/db.ts
+--- a/services/worker/src/db.ts
++++ b/services/worker/src/db.ts
+@@ -1,60 +1,78 @@
+-import { Pool, PoolClient, QueryConfig, QueryResult } from "pg";
++import { Pool, QueryResult } from "pg";
++import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
+ 
+ const INSTANCE = process.env.DB_INSTANCE_CONNECTION_NAME!; // proj:region:instance
+ const DB_USER  = process.env.DB_USER!;
+ const DB_PASS  = process.env.DB_PASS!;
+ const DB_NAME  = process.env.DB_NAME!;
++const PG_POOL_MAX = process.env.PG_POOL_MAX;
+ 
+ declare global {
+   // eslint-disable-next-line no-var
+   var __GLOBAL_PG_POOL__: Pool | undefined;
+ }
+ 
+-const g: { __GLOBAL_PG_POOL__?: Pool } = globalThis;
++const g: { __GLOBAL_PG_POOL__?: Pool } =
++  typeof globalThis !== "undefined"
++    ? globalThis
++    : (typeof self !== "undefined"
++      ? self
++      : (typeof window !== "undefined" ? window : {}));
+ 
+-function createPool(): Pool {
++const createPool = (): Pool => {
+   return new Pool({
+     user: DB_USER,
+     password: DB_PASS,
+     database: DB_NAME,
+     host: `/cloudsql/${INSTANCE}`,
++    max: PG_POOL_MAX ? Number(PG_POOL_MAX) : 10,
+   });
+-}
++};
+ 
+ const pool: Pool = g.__GLOBAL_PG_POOL__ ?? createPool();
+ if (process.env.NODE_ENV !== "production") {
+   g.__GLOBAL_PG_POOL__ = pool;
+ }
+ 
+-export async function query<T = any>(
+-  text: string | QueryConfig,
+-  params?: any[],
+-  opts?: { retries?: number; retryDelayMs?: number }
+-): Promise<QueryResult<T>> {
++export async function query<T extends QueryResultRow = QueryResultRow>(
++  text: string | QueryConfig,
++  params?: any[],
++  opts?: { retries?: number; retryDelayMs?: number }
++): Promise<QueryResult<T>> {
+   const retries = opts?.retries ?? 1;
+   const retryDelayMs = opts?.retryDelayMs ?? 200;
+ 
+   for (let attempt = 0; attempt <= retries; attempt++) {
+     try {
+-      if (typeof text === "string") {
+-        return await pool.query<T>(text, params);
+-      } else {
+-        return await pool.query<T>(text);
+-      }
++      if (typeof text === "string") {
++        return await pool.query<T>(text, params as any);
++      } else {
++        return await pool.query<T>(text as QueryConfig);
++      }
+     } catch (err) {
+       const isLast = attempt === retries;
+       if (!isLast) {
+         // eslint-disable-next-line no-console
+         console.warn(`DB query failed (attempt ${attempt + 1}), retrying after ${retryDelayMs}ms`, err);
+         await new Promise((r) => setTimeout(r, retryDelayMs));
+         continue;
+       }
+       throw err;
+     }
+   }
+   throw new Error("unreachable");
+ }
+ 
+ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+@@ -72,13 +90,17 @@
+   }
+ }
+ 
+ export async function shutdownPool(): Promise<void> {
+   try {
+     // eslint-disable-next-line no-console
+     console.info("Shutting down DB pool...");
+     await pool.end();
+     g.__GLOBAL_PG_POOL__ = undefined;
+   } catch (e) {
+     // eslint-disable-next-line no-console
+     console.error("Error shutting down DB pool", e);
+   }
+ }
+ 
++export function getPool(): Pool {
++  return pool;
++}
++
+ if (typeof process !== "undefined" && process && typeof process.on === "function") {
+   const signals: string[] = ["SIGTERM", "SIGINT", "SIGHUP"];
+diff --git a/services/api/src/util.ts b/services/api/src/util.ts
+--- a/services/api/src/util.ts
++++ b/services/api/src/util.ts
+@@ -1,37 +1,38 @@
+-import { Storage } from "@google-cloud/storage";
++import { Storage } from "@google-cloud/storage";
+ import path from "node:path";
+ import os from "node:os";
+ 
+ const storage = new Storage();
+ const TMP = os.tmpdir();
+ 
+ export async function downloadToTmp(gcsUri: string): Promise<string> {
+-  if (!gcsUri) throw new Error("downloadToTmp: gcsUri is required");
++  if (!gcsUri) throw new Error("downloadToTmp: gcsUri is required");
+ 
+-  // gcsUri 形式: gs://bucket/path/to/object  または bucket/path/to/object
+-  let bucket: string | undefined;
+-  let name: string | undefined;
+-  const m = gcsUri.match(/^(?:gs|gcs):\/\/([^/]+)\/(.+)$/);
+-  if (m) {
+-    bucket = m[1];
+-    name = m[2];
+-  } else {
+-    const m2 = gcsUri.match(/^([^/]+)\/(.+)$/);
+-    if (m2) {
+-      bucket = m2[1];
+-      name = m2[2];
+-    }
+-  }
++  // gcsUri 形式: gs://bucket/path/to/object  または bucket/path/to/object
++  let bucket: string | undefined;
++  let name: string | undefined;
++  const m = gcsUri.match(/^(?:gs|gcs):\/\/([^/]+)\/(.+)$/);
++  if (m) {
++    bucket = m[1];
++    name = m[2];
++  } else {
++    const m2 = gcsUri.match(/^([^/]+)\/(.+)$/);
++    if (m2) {
++      bucket = m2[1];
++      name = m2[2];
++    }
++  }
+ 
+-  if (!bucket || !name) {
+-    throw new Error(`downloadToTmp: invalid gcsUri: ${gcsUri}`);
+-  }
++  if (!bucket || !name) {
++    throw new Error(`downloadToTmp: invalid gcsUri: ${gcsUri}`);
++  }
+ 
+-  // 一時ファイル名を作成してダウンロード
+-  const base = path.basename(name);
+-  const tmpPath = path.join(TMP, `src-${Date.now()}-${base}`);
++  // 一時ファイル名を作成してダウンロード
++  const base = path.basename(name);
++  const tmpPath = path.join(TMP, `src-${Date.now()}-${base}`);
+ 
+-  await storage.bucket(bucket).file(name).download({ destination: tmpPath });
++  // ensure bucket & name are strings when passed to storage API
++  await storage.bucket(String(bucket)).file(String(name)).download({ destination: tmpPath });
+ 
+-  // 重要: Promise<string> を返す
+-  return tmpPath;
++  // 重要: Promise<string> を返す
++  return tmpPath;
+ }
+diff --git a/services/worker/src/util.ts b/services/worker/src/util.ts
+--- a/services/worker/src/util.ts
++++ b/services/worker/src/util.ts
+@@ -3,5 +3,7 @@
+ 
+ const storage = new Storage();
+ 
+ export async function download(bucket: string, name: string, to: string) {
+-  await storage.bucket(bucket).file(name).download({ destination: to });
++  if (!name) throw new Error("util.download: name is required");
++  if (!bucket) throw new Error("util.download: bucket is required");
++  await storage.bucket(String(bucket)).file(String(name)).download({ destination: to });
+ }
+diff --git a/services/worker/src/index.ts b/services/worker/src/index.ts
+--- a/services/worker/src/index.ts
++++ b/services/worker/src/index.ts
+@@ -4,7 +4,7 @@
+ import { finalizeSuccess, getJob, startJob, updateJobProgress } from "./job";
+ import { transcribe } from "./audio";
+ import { shutdownPool } from "./db";
+-import { query, getPool } from "./db";
++import { withTx } from "./db";
+ 
+ const app = express();
+ app.use(express.json());
+@@ -107,11 +107,11 @@
+ }
+ 
+ async function acquireAdvisoryLock(jobId: string): Promise<boolean> {
+-  const pool = getPool();
+-  const client = await pool.connect();
+   try {
+-    const res = await client.query("SELECT pg_try_advisory_lock(hashtext($1))", [jobId]);
+-    return res.rows[0].pg_try_advisory_lock;
++    return await withTx(async (client) => {
++      const res = await client.query("SELECT pg_try_advisory_lock(hashtext($1))", [jobId]);
++      return res.rows[0].pg_try_advisory_lock;
++    });
+   } finally {
+-    client.release();
++    // withTx will release
+   }
+ }
+ 
+@@ -120,13 +120,13 @@
+  * @returns true if lock was released, false if not held
+  */
+ async function releaseAdvisoryLock(jobId: string): Promise<boolean> {
+-  const pool = getPool();
+-  const client = await pool.connect();
+   try {
+-    const res = await client.query("SELECT pg_advisory_unlock(hashtext($1))", [jobId]);
+-    return res.rows[0].pg_advisory_unlock;
++    return await withTx(async (client) => {
++      const res = await client.query("SELECT pg_advisory_unlock(hashtext($1))", [jobId]);
++      return res.rows[0].pg_advisory_unlock;
++    });
+   } finally {
+-    client.release();
++    // withTx will release
+   }
+ }
+ 
+@@ -142,7 +142,7 @@
+   // finalizeSuccess は冪等だが、重複実行を避けるため advisory lock
+   const isLocked = await acquireAdvisoryLock(job.id);
+   if (!isLocked) return;
+-  const pend = await query(`SELECT count(*) FROM job_chunks WHERE job_id = $1 AND status != 'success'`, [job.id]);
+-  if (Number(pend.rows[0].count) !== 0) return;
++  const pend = await query(`SELECT count(*) FROM job_chunks WHERE job_id = $1 AND status != 'success'`, [job.id]);
++  if (!pend || !pend.rows || !pend.rows[0] || Number(pend.rows[0].count) !== 0) return;
+   try {
+     await finalizeSuccess(job);
+   } finally {
