@@ -167,7 +167,8 @@ async function finalizeIfAllDone(jobId: string) {
     `SELECT count(*) FROM chunks WHERE job_id=$1 AND status <> 'DONE'`,
     [jobId]
   );
-  if (!pend.rows || !pend.rows[0] || Number(pend.rows[0].count) !== 0) return;
+  if (!pend || !pend.rows || !pend.rows[0] || Number(pend.rows[0].count) !== 0) return;
+
 
   // 全文を連結
   const parts = await query<{ text: string; idx: number }>(

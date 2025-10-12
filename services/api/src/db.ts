@@ -1,6 +1,6 @@
-// services/*/src/db.ts
+cat > services/api/src/db.ts <<'TS'
 /**
- * db.ts
+ * services/api/src/db.ts
  * - node-postgres Pool を用いた安全な DB 接続モジュール
  * - withTx / query / advisory lock / graceful shutdown を提供
  *
@@ -11,9 +11,6 @@
  *  - PG_IDLE_TIMEOUT_MS (default: 30000)
  *  - PG_CONNECTION_TIMEOUT_MS (default: 5000)
  *  - CLOUD_SQL_CONNECTION_NAME (optional, for Cloud Run + Cloud SQL Unix socket)
- *
- * 注意:
- *  - Cloud Run から Unix socket で接続する場合、PGHOST を `/cloudsql/<CLOUD_SQL_CONNECTION_NAME>` に設定してください。
  */
 
 import { Pool, QueryResult } from "pg";
@@ -48,7 +45,6 @@ function createPool(): Pool {
 
   // Cloud SQL Unix socket を使うパターン（Cloud Run の場合）
   if (CLOUD_SQL_CONNECTION_NAME && !PGHOST) {
-    // NOTE: for unix socket, set host to `/cloudsql/<INSTANCE_CONNECTION_NAME>`
     const socketPath = `/cloudsql/${CLOUD_SQL_CONNECTION_NAME}`;
     return new Pool({
       host: socketPath,
@@ -109,11 +105,10 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       if (typeof text === "string") {
-  return await pool.query<T>(text, params as any);
-} else {
-  return await pool.query<T>(text as QueryConfig);
-}
-
+        return await pool.query<T>(text, params as any);
+      } else {
+        return await pool.query<T>(text as QueryConfig);
+      }
     } catch (err) {
       const isLast = attempt === retries;
       // 遷移的なエラーなら再試行、それ以外は即投げる
@@ -131,7 +126,6 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
 }
 
 // --- トランザクションユーティリティ ---
-// withTx は client を返さず、fn の中で client を使ってクエリを行うスタイル
 export async function withTx<T>(fn: (client: PoolClient) => Promise<T>, opts?: { readonly?: boolean }): Promise<T> {
   const client = await pool.connect();
   try {
@@ -153,11 +147,8 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>, opts?: {
 }
 
 // --- Advisory Lock ヘルパー ---
-// 引数 key は任意の文字列（jobId 等）を想定。
-// 注意: hashtext() は PostgreSQL の関数。もし未定義なら別方式で key-> bigint を変換してください。
 export async function acquireAdvisoryLock(clientOrKey: PoolClient | string, key?: string): Promise<boolean> {
   if (typeof clientOrKey === "string") {
-    // simple path: run on pool
     const lockKey = clientOrKey;
     const res = await pool.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [lockKey]);
     return res.rows[0]?.ok ?? false;
@@ -195,6 +186,11 @@ export async function shutdownPool(): Promise<void> {
   }
 }
 
+// 既存コードが getPool を参照する箇所に対応するユーティリティ
+export function getPool(): Pool {
+  return pool;
+}
+
 // SIGTERM 等で graceful shutdown を行う（Cloud Run が SIGTERM を送る）
 if (typeof process !== "undefined") {
   const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
@@ -215,10 +211,6 @@ if (typeof process !== "undefined") {
     }
   });
 }
-// db.ts のどこか export の前に追加
-export function getPool(): Pool {
-  return pool;
-}
 
 export { pool };
 export default {
@@ -229,3 +221,4 @@ export default {
   releaseAdvisoryLock,
   shutdownPool,
 };
+TS

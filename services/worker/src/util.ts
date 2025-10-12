@@ -14,7 +14,10 @@ export async function download(gcsUri: string, to: string): Promise<void> {
   await fs.mkdir(path.dirname(to), { recursive: true });
   if (!name) throw new Error("util.download: name is required");
 if (!bucket) throw new Error("util.download: bucket is required");
-await storage.bucket(bucket).file(name).download({ destination: to });
+if (!name) throw new Error("util.download: name is required");
+if (!bucket) throw new Error("util.download: bucket is required");
+await storage.bucket(String(bucket)).file(String(name)).download({ destination: to });
+
 }
 
 export async function ffmpegExtract(inPath: string, outPath: string, start: number, end: number): Promise<void> {
