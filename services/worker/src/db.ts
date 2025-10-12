@@ -1,9 +1,3 @@
-cat > services/worker/src/db.ts <<'TS'
-/**
- * services/worker/src/db.ts
- * 同一の修正版（api と同一）
- */
-
 import { Pool, QueryResult } from "pg";
 import type { PoolClient, QueryConfig, QueryResultRow } from "pg";
 
@@ -19,7 +13,6 @@ const {
   PG_CONNECTION_TIMEOUT_MS,
   PG_SSL,
   CLOUD_SQL_CONNECTION_NAME,
-  NODE_ENV,
 } = process.env;
 
 function createPool(): Pool {
@@ -104,7 +97,7 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   throw new Error("unreachable");
 }
 
-export async function withTx<T>(fn: (client: PoolClient) => Promise<T>, opts?: { readonly?: boolean }): Promise<T> {
+export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -112,11 +105,7 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>, opts?: {
     await client.query("COMMIT");
     return result;
   } catch (e) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackErr) {
-      console.error("Error during rollback", rollbackErr);
-    }
+    try { await client.query("ROLLBACK"); } catch {}
     throw e;
   } finally {
     client.release();
@@ -125,8 +114,7 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>, opts?: {
 
 export async function acquireAdvisoryLock(clientOrKey: PoolClient | string, key?: string): Promise<boolean> {
   if (typeof clientOrKey === "string") {
-    const lockKey = clientOrKey;
-    const res = await pool.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [lockKey]);
+    const res = await pool.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [clientOrKey]);
     return res.rows[0]?.ok ?? false;
   } else {
     const client = clientOrKey;
@@ -138,8 +126,7 @@ export async function acquireAdvisoryLock(clientOrKey: PoolClient | string, key?
 
 export async function releaseAdvisoryLock(clientOrKey: PoolClient | string, key?: string): Promise<boolean> {
   if (typeof clientOrKey === "string") {
-    const lockKey = clientOrKey;
-    const res = await pool.query<{ ok: boolean }>(`SELECT pg_advisory_unlock(hashtext($1)) AS ok`, [lockKey]);
+    const res = await pool.query<{ ok: boolean }>(`SELECT pg_advisory_unlock(hashtext($1)) AS ok`, [clientOrKey]);
     return res.rows[0]?.ok ?? false;
   } else {
     const client = clientOrKey;
@@ -172,4 +159,3 @@ export default {
   releaseAdvisoryLock,
   shutdownPool,
 };
-TS
