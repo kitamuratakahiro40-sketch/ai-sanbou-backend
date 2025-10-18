@@ -1,10 +1,10 @@
-
+{
   "name": "scribe-service",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "start": "node dist/index.js",
-    "build": "prisma generat && tsc"
+    "build": "prisma generate && tsc"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.10.0",
