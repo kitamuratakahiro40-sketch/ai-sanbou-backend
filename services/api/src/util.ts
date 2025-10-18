@@ -10,9 +10,7 @@ const storage = new Storage();
 const TMP = os.tmpdir();
 
 /**
- * gcsUri -> 一時ファイルのパスを返す
- * gcsUri 例: "gs://bucket/path/to/object" または "bucket/path/to/object"
- * Cloud Run では /tmp が書き込み可能（ただし永続化されない点に注意）
+ * downloadToTmp: GCS オブジェクトを一時ファイルにダウンロードしてパスを返す
  */
 export async function downloadToTmp(gcsUri: string): Promise<string> {
   if (!gcsUri) throw new Error("downloadToTmp: gcsUri is required");
@@ -53,14 +51,32 @@ export async function downloadToTmp(gcsUri: string): Promise<string> {
 }
 
 /**
- * ffprobe を呼んでメディアの長さ（秒）を返すユーティリティ
- * - ffprobe コマンドが PATH 上に必要（Cloud Run のイメージに ffprobe を含めること）
- * - 失敗した場合は 0 を返す（呼び出し側で扱いやすくするため）
+ * ffprobe の実行パスを決定する
+ * - まず ffprobe-static があればそれを使う（バイナリの絶対パス）
+ * - なければ PATH 上の "ffprobe" を使う
+ */
+let ffprobeExec = "ffprobe";
+try {
+  // require を使って柔軟にロード（TypeScript の型エラー回避）
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const ffprobeStatic = require("ffprobe-static");
+  if (ffprobeStatic) {
+    // ffprobe-static は string か { path: string } を返す実装があるため両方対応
+    ffprobeExec = (ffprobeStatic.path ?? ffprobeStatic) as string;
+  }
+} catch (e) {
+  // ffprobe-static が無くても PATH 上の ffprobe を使うためフォールバック
+  ffprobeExec = "ffprobe";
+}
+
+/**
+ * ffprobe を実行してメディア長（秒）を返す
+ * - ffprobe が使えない場合やエラー時は 0 を返す（呼び出し側で扱いやすくするため）
  */
 export async function ffprobeDurationSeconds(filePath: string): Promise<number> {
   if (!filePath) throw new Error("ffprobeDurationSeconds: filePath required");
   try {
-    const { stdout } = (await execFileAsync("ffprobe", [
+    const { stdout } = (await execFileAsync(ffprobeExec, [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",
@@ -78,7 +94,6 @@ export async function ffprobeDurationSeconds(filePath: string): Promise<number> 
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("ffprobeDurationSeconds: failed to run ffprobe:", err);
-    // 戻り値 0 は呼び出し側で扱いやすい（必要ならここで throw に変更）
     return 0;
   }
 }

@@ -1,16 +1,20 @@
 {
   "name": "ai-sanbou-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "npx tsc --noEmit"
-  },
-  "keywords": [],
+  "private": true,
+  "description": "AI Sanbou Project - Monorepo Root",
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
+  "workspaces": [
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@types/node": "^20.14.2",
+    "typescript": "^5.4.5"
   }
 }

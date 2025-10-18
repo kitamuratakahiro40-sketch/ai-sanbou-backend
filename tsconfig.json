@@ -1,19 +1,16 @@
+// 【親】プロジェクトルートの tsconfig.json
 {
   "compilerOptions": {
-    "target": "es2020",
-    "module": "commonjs",
-    "moduleResolution": "node",
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "baseUrl": "./",             // インポートの基点をここ（ルート）にする
+    "paths": {
+      "src/*": ["src/*"]         // 'src/...'で始まるインポートをルートのsrcフォルダにマッピング
+    },
+    "strict": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "strict": false,
-    "resolveJsonModule": true,
-    "outDir": "dist",
-    "allowJs": true,
-    "isolatedModules": false,
-    "noEmit": true,
-    "verbatimModuleSyntax": false
-  },
-  "include": ["services/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "dist"]
+    "resolveJsonModule": true
+  }
 }

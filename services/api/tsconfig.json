@@ -1,12 +1,10 @@
+// 【子】services/api/tsconfig.json
 {
+  "extends": "../../tsconfig.json", // 親の設定を引き継ぐ
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "node",
-    "outDir": "dist",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
+    "outDir": "./dist",             // ビルド結果はこのフォルダ内のdistに出力
+    "rootDir": "../../"             // ソースコードのルートは2階層上（プロジェクトルート）
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*.ts"],       // このフォルダ内のsrc以下をコンパイル対象にする
+  "exclude": ["node_modules"] // 不要ファイルは除外
 }

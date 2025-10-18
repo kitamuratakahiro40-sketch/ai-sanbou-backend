@@ -1,0 +1,79 @@
+# === cloudbuild.yaml (最終改修版) ===
+# Usage: gcloud builds submit --config=cloudbuild.yaml . \
+#   --substitutions=_PROJECT_ID=..., _REGION=..., _REPO=..., _IMAGE_NAME=..., _TAG=...
+
+substitutions:
+  # デフォルトはオーバーライド可
+  _PROJECT_ID: "sanbou-ai-project"
+  _REGION: "asia-southeast1"
+  _REPO: "app-images"
+  _IMAGE_NAME: "scribe-api"
+  _TAG: "latest"
+
+steps:
+  # ----------------------------------------------------------------
+  # 【改革点 1】兵站の確立 (npm install)
+  # 'npm ci' から 'npm install' に変更。
+  # これにより、ルートと全ワークスペース (api, worker) の
+  # 依存関係が正しくインストールされる。
+  # ----------------------------------------------------------------
+  - name: 'node:18'
+    id: 'install-all-dependencies'
+    entrypoint: 'npm'
+    args: ['install']
+
+  # ----------------------------------------------------------------
+  # 【改革点 2】全部隊のビルド
+  # ルートのpackage.jsonに定義した "build" スクリプトを実行。
+  # これが 'npm run build --workspaces' を呼び出し、
+  # 全てのサービス (api, worker) が個別にビルドされる。
+  # ----------------------------------------------------------------
+  - name: 'node:18'
+    id: 'build-monorepo'
+    entrypoint: 'npm'
+    args: ['run', 'build']
+
+  # ----------------------------------------------------------------
+  # 3) Dockerイメージのビルド (この工程は変更なし)
+  # ビルドされた 'scribe-api' の成果物 (dist) を含むイメージを作成。
+  # ----------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-build'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG}'
+      - '-f'
+      - 'services/api/Dockerfile'
+      - '.'
+
+  # ----------------------------------------------------------------
+  # 4) Artifact Registryへのプッシュ (この工程は変更なし)
+  # ----------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-push'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG}'
+
+  # ----------------------------------------------------------------
+  # 5) Cloud Runへのデプロイ (この工程は変更なし)
+  # ----------------------------------------------------------------
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'gcloud-deploy'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -e
+        echo ">> Deploying to Cloud Run: service=scribe-api region=${_REGION}"
+        gcloud run deploy scribe-api \
+          --image=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG} \
+          --region=${_REGION} \
+          --platform=managed \
+          --quiet \
+          --project=${_PROJECT_ID} \
+          --set-secrets=DATABASE_URL=DATABASE_URL:latest
+
+images:
+  - '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_IMAGE_NAME}:${_TAG}'

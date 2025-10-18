@@ -1,5 +1,5 @@
-// services/api/src/tasks.ts
 import { CloudTasksClient } from '@google-cloud/tasks';
+import type { TaskPayload as BaseTaskPayload } from 'src/types/domain.js';
 
 const client = new CloudTasksClient();
 
@@ -12,31 +12,36 @@ const {
 } = process.env as Record<string, string | undefined>;
 
 if (!PROJECT_ID || !TASKS_LOCATION || !TASKS_QUEUE || !TASKS_SA_EMAIL || !WORKER_URL) {
-  throw new Error(
-    'Missing env: PROJECT_ID/TASKS_LOCATION/TASKS_QUEUE/TASKS_SA_EMAIL/WORKER_URL'
-  );
+  throw new Error('Missing env: PROJECT_ID/TASKS_LOCATION/TASKS_QUEUE/TASKS_SA_EMAIL/WORKER_URL');
 }
 
-function originOf(u: string) {
-  return new URL(u).origin;
-}
-
-export type TranscribePayload = {
-  jobId: string;
+// 共有 TaskPayload を拡張（旧呼び出し互換用フィールド）
+export type TranscribePayload = BaseTaskPayload & {
   chunkId?: string;
-  gcsUri: string;
   startMs?: number;
   endMs?: number;
-  languageHint?: string;
 };
 
-export async function enqueueTranscribeTask(
-  payload: TranscribePayload
-): Promise<string> {
+// 必要に応じて /tasks/transcribe を付与（WORKER_URL が既にフルパスならそのまま）
+function resolveTargetUrl(base: string): string {
+  try {
+    const u = new URL(base);
+    if (!u.pathname || u.pathname === '/' ) {
+      u.pathname = '/tasks/transcribe';
+      return u.toString();
+    }
+    return u.toString(); // 既にパスあり → そのまま使う
+  } catch {
+    // 万一不正なURLなら素直にそのまま返す（環境変数を直すべきケース）
+    return base;
+  }
+}
+
+export async function enqueueTranscribeTask(payload: TranscribePayload): Promise<string> {
   const parent = client.queuePath(PROJECT_ID!, TASKS_LOCATION!, TASKS_QUEUE!);
 
-  // 必ず /tasks/transcribe にPOST
-  const targetUrl = new URL('/tasks/transcribe', WORKER_URL!).toString();
+  // 最終的に叩くURL（/tasks/transcribe を自動補完）
+  const targetUrl = resolveTargetUrl(WORKER_URL!);
 
   const task = {
     httpRequest: {
@@ -45,11 +50,15 @@ export async function enqueueTranscribeTask(
       headers: { 'Content-Type': 'application/json' },
       oidcToken: {
         serviceAccountEmail: TASKS_SA_EMAIL!,
-        audience: originOf(WORKER_URL!),
+        // Cloud Run の OIDC は「実際に叩くURL」と合わせるのが無難
+        audience: targetUrl,
       },
-      body: Buffer.from(JSON.stringify(payload)).toString('base64'),
+      // ✅ Buffer を渡す（SDKがBase64化）
+      body: Buffer.from(JSON.stringify(payload)),
     },
+    // 処理上限（必要に応じて調整）
     dispatchDeadline: { seconds: 600 },
+    // scheduleTime を使う場合はここに追加
   };
 
   const [res] = await client.createTask({ parent, task });
@@ -57,22 +66,18 @@ export async function enqueueTranscribeTask(
 }
 
 /**
- * 後方互換：旧シグネチャ (jobId, chunkId, payload) でも動くようにする。
- * 既存の api.ts の呼び出しを変更せず、そのままビルド通過＆動作します。
+ * 後方互換：旧シグネチャ (jobId, chunkId, payload) でも動作
  */
 export function enqueueChunkTask(
   a: TranscribePayload | string,
   b?: string,
   c?: Omit<TranscribePayload, 'jobId' | 'chunkId'>
 ): Promise<string> {
-  // 新シグネチャ: enqueueChunkTask({ ...payload })
   if (typeof a === 'object' && a !== null && b === undefined && c === undefined) {
     return enqueueTranscribeTask(a as TranscribePayload);
   }
-  // 旧シグネチャ: enqueueChunkTask(jobId, chunkId, payload)
   const jobId = a as string;
   const chunkId = b as string | undefined;
   const payload = (c ?? {}) as Omit<TranscribePayload, 'jobId' | 'chunkId'>;
-
   return enqueueTranscribeTask({ jobId, chunkId, ...(payload as any) });
 }

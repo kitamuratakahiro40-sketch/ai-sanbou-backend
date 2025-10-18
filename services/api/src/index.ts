@@ -1,12 +1,12 @@
 import express from 'express';
 import bodyParser from 'body-parser';
 import crypto from 'crypto';
-import { CloudTasksClient } from '@google-cloud/tasks';
 import { Storage } from '@google-cloud/storage';
 
 import { query } from './db.js';
 import { downloadToTmp, ffprobeDurationSeconds } from './util.js';
 import { planChunks } from './chunk.js';
+import { enqueueTranscribeTask, enqueueChunkTask } from './tasks.js';
 
 const app = express();
 app.use(bodyParser.json());
@@ -39,40 +39,12 @@ const bucket = storage.bucket(BUCKET_NAME);
 const SAFE_NAME_RE = /^[a-zA-Z0-9._\-\/]{1,200}$/;
 const hasDotDot = (p: string) => p.includes('..');
 
-const tasksClient = new CloudTasksClient();
-const queuePath = tasksClient.queuePath(PROJECT_ID, TASKS_LOCATION, TASKS_QUEUE);
 
 // ========== 共通ユーティリティ ==========
 function newJobId() {
   return crypto.randomUUID();
 }
 
-async function enqueueTranscribeTask(args: {
-  jobId: string; gcsUri: string; idx: number; startSec: number; endSec: number;
-}) {
-  try {
-    const aud = new URL(WORKER_URL).origin;
-    const body = Buffer.from(JSON.stringify(args)).toString('base64');
-
-    console.info(`[enqueueTranscribeTask] -> idx=${args.idx} job=${args.jobId}`);
-    await tasksClient.createTask({
-      parent: queuePath,
-      task: {
-        httpRequest: {
-          httpMethod: 'POST',
-          url: WORKER_URL,
-          headers: { 'Content-Type': 'application/json' },
-          body,
-          oidcToken: { serviceAccountEmail: TASKS_SA_EMAIL, audience: aud },
-        },
-      },
-    });
-    console.info(`[enqueueTranscribeTask] OK idx=${args.idx} job=${args.jobId}`);
-  } catch (e: any) {
-    console.error(`[enqueueTranscribeTask] ERROR idx=${args.idx} job=${args.jobId}`, e, e?.stack);
-    throw e;
-  }
-}
 
 /**
  * 中核処理：新しい音声ファイルを受けて、DB登録→チャンク作成→Cloud Tasks投入まで実施。
@@ -111,16 +83,16 @@ async function processNewAudioFile(gcsUri: string, sliceSec = 600) {
     );
   }
 
-  // 4) Cloud Tasks へ投入
-  for (const it of plan.items) {
-    await enqueueTranscribeTask({
-      jobId,
-      gcsUri,
-      idx: it.idx,
-      startSec: it.start,
-      endSec: it.end,
-    });
-  }
+// 4) Cloud Tasks へ投入
+for (const it of plan.items) {
+  await enqueueTranscribeTask({
+    jobId,
+    gcsUri,
+    idx: it.idx,
+    startSec: it.start,
+    endSec: it.end,
+  });
+}
 
   console.info(`[processNewAudioFile] DONE job=${jobId}`);
   return { jobId, durationSec, totalChunks: plan.total, status: 'RUNNING' as const };

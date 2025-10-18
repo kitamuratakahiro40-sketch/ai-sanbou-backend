@@ -1,9 +1,10 @@
 {
-  "name": "scribe-service",
+  "name": "scribe-worker",
   "version": "1.0.0",
   "type": "module",
+  "private": true,
   "scripts": {
-    "start": "node dist/worker.js",
+    "start": "node dist/index.js",
     "build": "tsc"
   },
   "dependencies": {

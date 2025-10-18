@@ -6,7 +6,7 @@ import fs from "fs/promises";
 import path from "path";
 import { download, ffmpegExtract, TMP_DIR } from "./util.js";
 import { Storage } from "@google-cloud/storage";
-import { query, getPool } from "./db";
+import { query, getPool } from "./db.js";
 import { finalizeSuccess, finalizeFailure } from "./finalize.js";
 
 
@@ -178,7 +178,7 @@ async function finalizeIfAllDone(jobId: string) {
       ORDER BY idx ASC`,
     [jobId]
   );
-  const full = sanitizeTranscript(parts.rows.map((r) => r.text).join("\n"));
+  const full = sanitizeTranscript(parts.rows.map((r: any) => r.text).join("\n"));
 
   // GCS へ保存 → finalizeSuccess で DB を一括確定
   try {
