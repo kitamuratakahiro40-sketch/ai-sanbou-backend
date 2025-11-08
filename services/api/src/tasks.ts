@@ -1,7 +1,13 @@
-import { CloudTasksClient } from '@google-cloud/tasks';
-import type { TaskPayload as BaseTaskPayload } from 'src/types/domain.js';
+// 動的 import（ESMパッケージ対応）
+async function getTasksClient() {
+  const mod = await import('@google-cloud/tasks');
+  return new mod.CloudTasksClient();
+}
 
-const client = new CloudTasksClient();
+import type { TaskPayload as BaseTaskPayload } from './types/domain';
+
+// ❌ これが原因（トップレベル await）
+// const client = await getTasksClient();
 
 const {
   PROJECT_ID,
@@ -22,25 +28,25 @@ export type TranscribePayload = BaseTaskPayload & {
   endMs?: number;
 };
 
-// 必要に応じて /tasks/transcribe を付与（WORKER_URL が既にフルパスならそのまま）
+// 必要に応じて /tasks/transcribe を付与
 function resolveTargetUrl(base: string): string {
   try {
     const u = new URL(base);
-    if (!u.pathname || u.pathname === '/' ) {
+    if (!u.pathname || u.pathname === '/') {
       u.pathname = '/tasks/transcribe';
       return u.toString();
     }
-    return u.toString(); // 既にパスあり → そのまま使う
+    return u.toString();
   } catch {
-    // 万一不正なURLなら素直にそのまま返す（環境変数を直すべきケース）
     return base;
   }
 }
 
+// ★ 関数内で client を取得（ここなら await 可）
 export async function enqueueTranscribeTask(payload: TranscribePayload): Promise<string> {
+  const client = await getTasksClient();
   const parent = client.queuePath(PROJECT_ID!, TASKS_LOCATION!, TASKS_QUEUE!);
 
-  // 最終的に叩くURL（/tasks/transcribe を自動補完）
   const targetUrl = resolveTargetUrl(WORKER_URL!);
 
   const task = {
@@ -50,15 +56,11 @@ export async function enqueueTranscribeTask(payload: TranscribePayload): Promise
       headers: { 'Content-Type': 'application/json' },
       oidcToken: {
         serviceAccountEmail: TASKS_SA_EMAIL!,
-        // Cloud Run の OIDC は「実際に叩くURL」と合わせるのが無難
         audience: targetUrl,
       },
-      // ✅ Buffer を渡す（SDKがBase64化）
       body: Buffer.from(JSON.stringify(payload)),
     },
-    // 処理上限（必要に応じて調整）
     dispatchDeadline: { seconds: 600 },
-    // scheduleTime を使う場合はここに追加
   };
 
   const [res] = await client.createTask({ parent, task });
