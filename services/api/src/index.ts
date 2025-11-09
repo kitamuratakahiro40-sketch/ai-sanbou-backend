@@ -46,17 +46,18 @@ const WORKER_URL = process.env.WORKER_URL!; // e.g. https://<worker>.run.app/tas
 const TASKS_SA_EMAIL = process.env.TASKS_SA_EMAIL!;
 const TASKS_LOCATION = process.env.TASKS_LOCATION || 'asia-southeast1';
 const TASKS_QUEUE = process.env.TASKS_QUEUE || 'scribe-queue';
-const SIGNED_URL_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS ?? 900);
+
+// ====== env ======
+const PORT = Number(process.env.PORT ?? 8080);
+const SIGNED_URL_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS ?? 3600);
+// ==================
+
 
 const storage = new Storage();
 const bucket = storage.bucket(BUCKET_NAME);
 const SAFE_NAME_RE = /^[a-zA-Z0-9._\-\/]{1,200}$/;
 const hasDotDot = (p: string) => p.includes('..');
-const PORT = Number(process.env.PORT) || 8080;
-app.listen(PORT, () => {
-  console.log(`[api] listening on ${PORT}`);
-});
-const SIGNED_URL_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS ?? 3600);
+
 
 // ========== 共通ユーティリティ ==========
 function newJobId() {
@@ -337,5 +338,4 @@ app.get('/', (_req, res) => {
 });
 
 // ========== 起動 ==========
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.info(`[scribe-api] Listening on :${PORT}`));
+
