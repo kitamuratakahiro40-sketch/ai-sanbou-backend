@@ -1,7 +1,7 @@
 import { Storage } from "@google-cloud/storage";
-import path from "node:path";
-import os from "node:os";
-import crypto from "node:crypto";
+import * as path from 'node:path';
+import * as os from 'node:os';
+import * as crypto from 'node:crypto';
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 

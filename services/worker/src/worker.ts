@@ -1,14 +1,26 @@
-// services/worker/src/worker.ts
-import express from "express";
+import express, { Request, Response } from "express";
 import { Pool } from "pg";
 import { Storage } from "@google-cloud/storage";
-import fs from "fs/promises";
-import path from "path";
-import { download, ffmpegExtract, TMP_DIR } from './util.js';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { download, ffmpegExtract, TMP_DIR } from './util';
 import { VertexAI } from "@google-cloud/vertexai";
 
 const app = express();
 app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.path === '/healthz') return res.status(200).send('ok');
+  next();
+});
+
+
+
+// --- Health checks (safe to duplicate) ---
+app.get('/', (_req: Request, res: Response) => res.status(200).send('ok'));
+app.get('/healthz', (_req: Request, res: Response) => res.status(200).send('ok'));
+app.get('/ping', (_req: Request, res: Response) => res.status(200).send('ok'));
+
 
 // ==== env ====
 const PORT = Number(process.env.PORT || 8080);
@@ -148,7 +160,7 @@ async function maybeFinalize(jobId: string) {
  * Cloud Tasks から叩かれる想定
  * body: { jobId, idx, gcsUri, startMs?, endMs?, languageHint? }
  */
-app.post("/tasks/transcribe", async (req, res) => {
+app.post("/tasks/transcribe", async (req: Request, res: Response) => {
   const { jobId, idx, gcsUri, startMs, endMs, languageHint = "auto" } = req.body || {};
 
   const retryHeader =

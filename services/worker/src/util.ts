@@ -1,7 +1,7 @@
 import { Storage } from '@google-cloud/storage';
 import { spawn } from 'child_process';
-import fs from 'fs/promises';
-import path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 const storage = new Storage();
 const TMP = '/tmp';

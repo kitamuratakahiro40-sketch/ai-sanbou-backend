@@ -1,12 +1,19 @@
-# ステージ1: ビルド環境
-FROM node:18-alpine AS builder
+FROM node:20-bullseye
 WORKDIR /app
-COPY . .
-RUN cd services/worker && npm install && npm run build
 
-# ---
-# ステージ2: 本番環境
-FROM node:18-alpine
-WORKDIR /app
-COPY --from=builder /app/services/worker .
-CMD ["node", "dist/index.js"]
+COPY package*.json ./
+# ビルド用に dev も入れる
+RUN npm install --include=dev --no-audit --no-fund
+
+COPY tsconfig.json ./
+COPY src ./src
+
+# TypeScript ビルド
+RUN npx tsc -p tsconfig.json
+
+# 本番は prod 依存だけに絞る
+RUN npm prune --omit=dev
+
+ENV NODE_ENV=production
+EXPOSE 8080
+CMD ["node","dist/worker.js"]

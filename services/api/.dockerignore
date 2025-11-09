@@ -1,5 +1,8 @@
 node_modules
+dist
+.git
+.gitignore
 npm-debug.log
-Dockerfile
-.tsconfig.json
-**/.DS_Store
+pnpm-lock.yaml
+yarn.lock
+

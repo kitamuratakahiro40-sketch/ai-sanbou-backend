@@ -1,45 +1,47 @@
-# === services/api/Dockerfile (最終確定・完全版) ===
-
-# ----------------------------------------------------------------
-# Stage 1: Production Dependencies
-# モノレポ構造をDocker内で再現し、本番用の依存関係だけを
-# ルートの node_modules に正しくインストールするステージ。
-# ----------------------------------------------------------------
-FROM node:18-bookworm-slim AS dependencies
+# ---------- build ----------
+FROM node:20-slim AS build
 WORKDIR /app
 
-# ワークスペース構造を正しく認識させるため、全てのpackage.jsonをコピー
-COPY package.json package-lock.json ./
-COPY services/api/package.json ./services/api/
-COPY services/worker/package.json ./services/worker/
+# Prisma ネイティブのために OpenSSL
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
-# 全てのワークスペースの「本番用」依存関係のみをインストール
-# これにより、ルートに軽量な node_modules が作成される
-RUN npm install --production
+# 依存定義だけ先にコピー
+COPY package*.json ./
 
-# ----------------------------------------------------------------
-# Stage 2: Production Image
-# 最終的な本番用のコンテナイメージ。
-# ----------------------------------------------------------------
-FROM node:18-bookworm-slim AS production
-ENV NODE_ENV production
+# lockfile があってもなくても postinstall を回避してインストール
+RUN if [ -f package-lock.json ]; then \
+      npm ci --ignore-scripts --omit=dev=false; \
+    else \
+      npm install --ignore-scripts; \
+    fi
 
-# 【重要】ffmpegをインストール
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# tsconfig と Prisma スキーマをコピー
+COPY tsconfig.json ./
+COPY prisma ./prisma
 
+# ここで明示的に Prisma Client 生成（postinstall ではなく手動）
+RUN npx prisma generate --schema=prisma/schema.prisma
+
+# アプリのソースをコピーしてビルド
+COPY src ./src
+RUN npx tsc -p tsconfig.json
+
+# ---------- runtime ----------
+FROM node:20-slim AS runtime
 WORKDIR /app
+ENV NODE_ENV=production
 
-# Stage 1 から、本番用に整理された「ルートの」node_modules をコピー
-COPY --from=dependencies /app/node_modules ./node_modules
+# ランタイムにも OpenSSL（Prisma が使用）
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
-# Cloud Build が事前にビルドした、api の実行コード (dist) をコピー
-COPY services/api/dist ./dist
+# 必要物のみコピー
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/dist ./dist
+COPY package*.json ./
 
-# Prisma のスキーマをコピー
-COPY services/api/prisma ./prisma
+# Cloud Run が $PORT を注入
+ENV PORT=8080
+EXPOSE 8080
 
-# package.jsonをコピー（一部ライブラリが実行時に参照するため）
-COPY services/api/package.json ./package.json
-
-# コンテナ起動時に実行するコマンド
-CMD ["node", "dist/index.js"]
+CMD ["node","dist/index.js"]

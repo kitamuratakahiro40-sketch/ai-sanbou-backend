@@ -65,7 +65,7 @@ if (globalThis.__GLOBAL_PG_POOL__) {
   globalThis.__GLOBAL_PG_POOL__ = pool;
 }
 
-pool.on("error", (err) => {
+pool.on("error", (err: Error) => {
   console.error("Unexpected idle client error", err);
 });
 

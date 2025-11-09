@@ -1,14 +1,11 @@
 {
-  "name": "ai-sanbou-backend",
-  "version": "1.0.0",
+  "name": "sanbou-ai-monorepo",
+  "version": "0.0.0",
   "private": true,
   "description": "AI Sanbou Project - Monorepo Root",
   "author": "",
   "license": "ISC",
   "type": "module",
-  "workspaces": [
-    "services/*"
-  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present"

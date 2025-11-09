@@ -1,17 +1,28 @@
-import express from "express";
-import type { Request, Response } from "express";
+import express, { Request, Response } from "express";
 import bodyParser from "body-parser";
 import { VertexAI } from "@google-cloud/vertexai";
-import fs from "fs/promises";
-import path from "path";
-import { download, ffmpegExtract, TMP_DIR } from "./util.js";
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { download, ffmpegExtract, TMP_DIR } from "./util";
 import { Storage } from "@google-cloud/storage";
-import { query, getPool } from "./db.js";
-import { finalizeSuccess, finalizeFailure } from "./finalize.js";
+import { query, getPool } from "./db";
+import { finalizeSuccess, finalizeFailure } from "./finalize";
 
 
 const app = express();
 app.use(bodyParser.json());
+
+
+// ★ ヘルスチェック（確実にトップレベルで）
+app.get("/", (_req: Request, res: Response) => res.status(200).send("ok"));
+app.get("/healthz", (_req: Request, res: Response) => res.status(200).send("ok"));
+app.get("/ping", (_req: Request, res: Response) => res.status(200).send("ok"));
+
+// 起動
+const PORT = Number(process.env.PORT) || 8080;
+app.listen(PORT, () => {
+  console.log(`[worker] listening on :${PORT}`);
+});
 
 // ---- Vertex AI（遅延初期化）----
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-pro";
@@ -303,11 +314,15 @@ app.post("/tasks/transcribe", transcribeHandler);
 app.post("/", transcribeHandler);
 
 // ヘルスチェック
-app.get("/", (_req, res) => res.status(200).send("ok"));   // ← 追加（重要）
-app.get("/healthz", (_req, res) => res.status(200).send("ok"));
-app.get("/ping", (_req, res) => res.status(200).send("ok"));
+app.get("/", (_req: Request, res: Response) => res.status(200).send("ok"));
+app.get("/healthz", (_req: Request, res: Response) => res.status(200).send("ok"));
+app.get("/ping", (_req: Request, res: Response) => res.status(200).send("ok"));
 
-const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Worker listening on :${PORT}`));
 // 既存のヘルス周りのすぐ下に追加
-app.get("/ping", (_req, res) => res.status(200).send("ok"));
+app.get("/ping", (_req: Request, res: Response) => res.status(200).send("ok"));
+
+/** health endpoints (idempotent, safe to duplicate) */
+app.get('/',   (_req: Request, res: Response) => res.status(200).send('ok'));
+app.get('/healthz', (_req: Request, res: Response) => res.status(200).send('ok'));
+app.get('/ping', (_req: Request, res: Response) => res.status(200).send('ok'));
