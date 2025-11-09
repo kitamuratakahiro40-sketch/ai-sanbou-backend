@@ -1,6 +1,6 @@
 import express from 'express';
 import bodyParser from 'body-parser';
-import crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { Storage } from '@google-cloud/storage';
 
 import { query } from './db.js';
@@ -9,7 +9,21 @@ import { planChunks } from './chunk.js';
 import { enqueueTranscribeTask, enqueueChunkTask } from './tasks.js';
 
 const app = express();
+app.use(express.json ? express.json() : (req,res,next)=>next());
+/** @health always-first */
+app.use((req, res, next) => {
+  if (req.path === '/healthz' || req.path === '/ping' || req.path === '/') {
+    return res.status(200).send('ok');
+  }
+  next();
+});
 app.use(bodyParser.json());
+
+// 既存の import などの下あたり
+// ---------- Healthz ----------
+app.head('/healthz', (_req, res) => res.status(200).end());
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+
 
 // ========== 起動時：環境変数の厳格検証 ==========
 const REQUIRED_ENVS = [
@@ -38,7 +52,11 @@ const storage = new Storage();
 const bucket = storage.bucket(BUCKET_NAME);
 const SAFE_NAME_RE = /^[a-zA-Z0-9._\-\/]{1,200}$/;
 const hasDotDot = (p: string) => p.includes('..');
-
+const PORT = Number(process.env.PORT) || 8080;
+app.listen(PORT, () => {
+  console.log(`[api] listening on ${PORT}`);
+});
+const SIGNED_URL_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS ?? 3600);
 
 // ========== 共通ユーティリティ ==========
 function newJobId() {
