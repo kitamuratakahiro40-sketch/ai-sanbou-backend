@@ -9,20 +9,6 @@ import { planChunks } from './chunk.js';
 import { enqueueTranscribeTask, enqueueChunkTask } from './tasks.js';
 
 const app = express();
-app.use(express.json ? express.json() : (req,res,next)=>next());
-/** @health always-first */
-app.use((req, res, next) => {
-  if (req.path === '/healthz' || req.path === '/ping' || req.path === '/') {
-    return res.status(200).send('ok');
-  }
-  next();
-});
-app.use(bodyParser.json());
-
-// 既存の import などの下あたり
-// ---------- Healthz ----------
-app.head('/healthz', (_req, res) => res.status(200).end());
-app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 
 // ========== 起動時：環境変数の厳格検証 ==========
@@ -57,6 +43,20 @@ const storage = new Storage();
 const bucket = storage.bucket(BUCKET_NAME);
 const SAFE_NAME_RE = /^[a-zA-Z0-9._\-\/]{1,200}$/;
 const hasDotDot = (p: string) => p.includes('..');
+
+
+
+app.use(express.json ? express.json() : (req,res,next)=>next());
+
+
+// 既存の import などの下あたり
+// ---------- Healthz ----------
+app.head('/healthz', (_req, res) => res.status(200).end());
+app.get('/healthz',  (_req, res) => res.status(200).send('ok'));
+app.get('/',         (_req, res) => res.status(200).send('ok'));
+app.get('/ping',     (_req, res) => res.status(200).send('pong'));
+
+
 
 
 // ========== 共通ユーティリティ ==========
@@ -339,3 +339,6 @@ app.get('/', (_req, res) => {
 
 // ========== 起動 ==========
 
+app.listen(PORT, () => {
+  console.log(`[api] listening on ${PORT}`);
+});
