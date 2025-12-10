@@ -31,6 +31,9 @@ FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# 確認用の槌（ffmpeg）をインストール
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # ランタイムにも OpenSSL（Prisma が使用）
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 

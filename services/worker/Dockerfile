@@ -1,4 +1,10 @@
 FROM node:20-bullseye
+
+# ▼ ffmpeg / ffprobe をインストール（ここが今回のポイント）
+RUN apt-get update -y \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -16,4 +22,5 @@ RUN npm prune --omit=dev
 
 ENV NODE_ENV=production
 EXPOSE 8080
-CMD ["node","dist/worker.js"]
+
+CMD ["node", "dist/worker.js"]

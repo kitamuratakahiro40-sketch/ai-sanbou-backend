@@ -15,8 +15,12 @@ const {
   CLOUD_SQL_CONNECTION_NAME,
 } = process.env;
 
+// Cloud Run 上では K_SERVICE が必ず入るので判定に使う
+const IS_CLOUD_RUN = !!process.env.K_SERVICE;
+
 function createPool(): Pool {
-  if (DATABASE_URL) {
+  // 【ローカル開発専用】Cloud Run では DATABASE_URL を使わない
+  if (DATABASE_URL && !IS_CLOUD_RUN) {
     return new Pool({
       connectionString: DATABASE_URL,
       max: Number(PG_POOL_MAX ?? 15),
@@ -26,6 +30,7 @@ function createPool(): Pool {
     });
   }
 
+  // 【Cloud SQL Unix ソケット経由】CLOUD_SQL_CONNECTION_NAME があり PGHOST が未セットのとき
   if (CLOUD_SQL_CONNECTION_NAME && !PGHOST) {
     const socketPath = `/cloudsql/${CLOUD_SQL_CONNECTION_NAME}`;
     return new Pool({
@@ -41,6 +46,7 @@ function createPool(): Pool {
     });
   }
 
+  // 【通常の TCP / またはソケットパスを PGHOST に直書きした場合】
   return new Pool({
     host: PGHOST ?? "127.0.0.1",
     port: Number(PGPORT ?? 5432),
@@ -55,14 +61,16 @@ function createPool(): Pool {
 }
 
 declare global {
+  // eslint-disable-next-line no-var
   var __GLOBAL_PG_POOL__: Pool | undefined;
 }
+
 let pool: Pool;
 if (globalThis.__GLOBAL_PG_POOL__) {
   pool = globalThis.__GLOBAL_PG_POOL__;
 } else {
-  pool = createPool();
-  globalThis.__GLOBAL_PG_POOL__ = pool;
+    pool = createPool();
+    globalThis.__GLOBAL_PG_POOL__ = pool;
 }
 
 pool.on("error", (err: Error) => {
@@ -87,7 +95,10 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
     } catch (err) {
       const isLast = attempt === retries;
       if (!isLast) {
-        console.warn(`DB query failed (attempt ${attempt + 1}), retrying after ${retryDelayMs}ms`, err);
+        console.warn(
+          `DB query failed (attempt ${attempt + 1}), retrying after ${retryDelayMs}ms`,
+          err
+        );
         await new Promise((r) => setTimeout(r, retryDelayMs));
         continue;
       }
@@ -105,33 +116,53 @@ export async function withTx<T>(fn: (client: PoolClient) => Promise<T>): Promise
     await client.query("COMMIT");
     return result;
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch {}
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
     throw e;
   } finally {
     client.release();
   }
 }
 
-export async function acquireAdvisoryLock(clientOrKey: PoolClient | string, key?: string): Promise<boolean> {
+export async function acquireAdvisoryLock(
+  clientOrKey: PoolClient | string,
+  key?: string
+): Promise<boolean> {
   if (typeof clientOrKey === "string") {
-    const res = await pool.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [clientOrKey]);
+    const res = await pool.query<{ ok: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext($1)) AS ok`,
+      [clientOrKey]
+    );
     return res.rows[0]?.ok ?? false;
   } else {
     const client = clientOrKey;
     if (!key) throw new Error("key required when passing client");
-    const res = await client.query<{ ok: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS ok`, [key]);
+    const res = await client.query<{ ok: boolean }>(
+      `SELECT pg_try_advisory_lock(hashtext($1)) AS ok`,
+      [key]
+    );
     return res.rows[0]?.ok ?? false;
   }
 }
 
-export async function releaseAdvisoryLock(clientOrKey: PoolClient | string, key?: string): Promise<boolean> {
+export async function releaseAdvisoryLock(
+  clientOrKey: PoolClient | string,
+  key?: string
+): Promise<boolean> {
   if (typeof clientOrKey === "string") {
-    const res = await pool.query<{ ok: boolean }>(`SELECT pg_advisory_unlock(hashtext($1)) AS ok`, [clientOrKey]);
+    const res = await pool.query<{ ok: boolean }>(
+      `SELECT pg_advisory_unlock(hashtext($1)) AS ok`,
+      [clientOrKey]
+    );
     return res.rows[0]?.ok ?? false;
   } else {
     const client = clientOrKey;
     if (!key) throw new Error("key required when passing client");
-    const res = await client.query<{ ok: boolean }>(`SELECT pg_advisory_unlock(hashtext($1)) AS ok`, [key]);
+    const res = await client.query<{ ok: boolean }>(
+      `SELECT pg_advisory_unlock(hashtext($1)) AS ok`,
+      [key]
+    );
     return res.rows[0]?.ok ?? false;
   }
 }
@@ -151,6 +182,7 @@ export function getPool(): Pool {
 }
 
 export { pool };
+
 export default {
   pool,
   query,

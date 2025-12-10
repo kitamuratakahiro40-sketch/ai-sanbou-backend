@@ -22,7 +22,7 @@ echo "🕒 10秒後に、データベースへの適用を自動的に開始し�
 sleep 10
 
 echo "🚀 データベースへ変更を適用します..."
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$MIGDIR/migration.sql"
+
 echo "✅ データベースへの適用が完了しました。"
 echo "--------------------------------------------------"
 

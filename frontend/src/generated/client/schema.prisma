@@ -1,0 +1,153 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client" // 👈 重要: キャッシュ回避のため生成場所を変更
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Enums ---
+enum JobStatus {
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SecurityMode {
+  NORMAL
+  ANONYMOUS
+  STEALTH
+}
+
+enum InputType {
+  AUDIO
+  TEXT
+}
+
+// --- Models ---
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  plan          String    @default("FREE")
+  usageCount    Int       @default(0)
+
+  accounts Account[]
+  sessions Session[]
+  projects Project[]
+  jobs     Job[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  contextData String?  @db.Text
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs        Job[]
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("projects")
+}
+
+model Job {
+  id String @id @default(uuid())
+
+  // Input
+  inputType   InputType @default(AUDIO) // Enum型です
+  sourceUrl   String?   @map("source_uri")
+  rawText     String?   @map("raw_text") @db.Text
+  fileName    String?
+  durationSec Int?
+
+  // Settings
+  status JobStatus    @default(UPLOADED)
+  mode   SecurityMode @default(NORMAL)
+
+  // AI Metadata
+  reporterName String? @map("reporter_name")
+  targetName   String? @map("target_name")
+  docType      String? @map("doc_type")
+
+  // Outputs
+  transcript        String? @db.Text
+  summaryReport     String? @db.Text
+  summaryActionJson Json?   @map("summary_action_json")
+  narrative         String? @db.Text
+  risks             String? @db.Text
+  score             Int?
+  slideUrl          String? @map("slide_url")
+  errorMessage      String? @map("error_message")
+
+  // 古い定義にある "summary" フィールドが必要ならここに追加してください
+  summary String? @db.Text
+
+  // Relations
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([userId, status])
+  @@map("jobs")
+}
+
+// NextAuth Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}

@@ -1,85 +1,76 @@
-// 動的 import（ESMパッケージ対応）
-async function getTasksClient() {
-  const mod = await import('@google-cloud/tasks');
-  return new mod.CloudTasksClient();
-}
+// services/api/src/tasks.ts
+import { CloudTasksClient } from "@google-cloud/tasks";
 
-import type { TaskPayload as BaseTaskPayload } from './types/domain';
+const REQUIRED_ENVS = [
+  "PROJECT_ID",
+  "WORKER_URL",
+  "TASKS_SA_EMAIL",
+] as const;
 
-// ❌ これが原因（トップレベル await）
-// const client = await getTasksClient();
-
-const {
-  PROJECT_ID,
-  TASKS_LOCATION,
-  TASKS_QUEUE,
-  TASKS_SA_EMAIL,
-  WORKER_URL,
-} = process.env as Record<string, string | undefined>;
-
-if (!PROJECT_ID || !TASKS_LOCATION || !TASKS_QUEUE || !TASKS_SA_EMAIL || !WORKER_URL) {
-  throw new Error('Missing env: PROJECT_ID/TASKS_LOCATION/TASKS_QUEUE/TASKS_SA_EMAIL/WORKER_URL');
-}
-
-// 共有 TaskPayload を拡張（旧呼び出し互換用フィールド）
-export type TranscribePayload = BaseTaskPayload & {
-  chunkId?: string;
-  startMs?: number;
-  endMs?: number;
-};
-
-// 必要に応じて /tasks/transcribe を付与
-function resolveTargetUrl(base: string): string {
-  try {
-    const u = new URL(base);
-    if (!u.pathname || u.pathname === '/') {
-      u.pathname = '/tasks/transcribe';
-      return u.toString();
-    }
-    return u.toString();
-  } catch {
-    return base;
+for (const k of REQUIRED_ENVS) {
+  if (!process.env[k]) {
+    console.error(`[tasks] Missing env: ${k}`);
+    throw new Error(`Missing environment variable in tasks.ts: ${k}`);
   }
 }
 
-// ★ 関数内で client を取得（ここなら await 可）
-export async function enqueueTranscribeTask(payload: TranscribePayload): Promise<string> {
-  const client = await getTasksClient();
-  const parent = client.queuePath(PROJECT_ID!, TASKS_LOCATION!, TASKS_QUEUE!);
+const PROJECT_ID = process.env.PROJECT_ID!;
+const WORKER_URL = process.env.WORKER_URL!; // e.g. https://<worker>.run.app/tasks/transcribe
+const TASKS_SA_EMAIL = process.env.TASKS_SA_EMAIL!;
+const TASKS_LOCATION = process.env.TASKS_LOCATION ?? "asia-northeast1";
+const TASKS_QUEUE = process.env.TASKS_QUEUE ?? "scribe-queue";
 
-  const targetUrl = resolveTargetUrl(WORKER_URL!);
+const tasksClient = new CloudTasksClient();
+
+export type EnqueueTranscribeParams = {
+  jobId: string;
+  gcsUri: string;
+  idx: number;
+  startSec: number;
+  endSec: number;
+  retryCount?: number;
+};
+
+export async function enqueueTranscribeTask(params: EnqueueTranscribeParams) {
+  const { jobId, gcsUri, idx, startSec, endSec, retryCount = 0 } = params;
+
+  const parent = tasksClient.queuePath(PROJECT_ID, TASKS_LOCATION, TASKS_QUEUE);
+
+  // Worker は旧フォーマット { jobId, gcsUri, idx, startSec, endSec, retryCount } を受け取る
+  const payload = {
+    jobId,
+    gcsUri,
+    idx,
+    startSec,
+    endSec,
+    retryCount,
+  };
+
+  // ★ ここがポイント：Buffer をそのまま渡す（ライブラリが base64 エンコードしてくれる）
+  const bodyBuffer = Buffer.from(JSON.stringify(payload), "utf8");
 
   const task = {
     httpRequest: {
-      httpMethod: 'POST' as const,
-      url: targetUrl,
-      headers: { 'Content-Type': 'application/json' },
-      oidcToken: {
-        serviceAccountEmail: TASKS_SA_EMAIL!,
-        audience: targetUrl,
+      httpMethod: "POST" as const,
+      url: WORKER_URL,
+      headers: {
+        "Content-Type": "application/json",
       },
-      body: Buffer.from(JSON.stringify(payload)),
+      body: bodyBuffer,
+      oidcToken: {
+        serviceAccountEmail: TASKS_SA_EMAIL,
+      },
     },
-    dispatchDeadline: { seconds: 600 },
   };
 
-  const [res] = await client.createTask({ parent, task });
-  return res.name ?? '';
-}
+  const [response] = await tasksClient.createTask({
+    parent,
+    task,
+  } as any);
 
-/**
- * 後方互換：旧シグネチャ (jobId, chunkId, payload) でも動作
- */
-export function enqueueChunkTask(
-  a: TranscribePayload | string,
-  b?: string,
-  c?: Omit<TranscribePayload, 'jobId' | 'chunkId'>
-): Promise<string> {
-  if (typeof a === 'object' && a !== null && b === undefined && c === undefined) {
-    return enqueueTranscribeTask(a as TranscribePayload);
-  }
-  const jobId = a as string;
-  const chunkId = b as string | undefined;
-  const payload = (c ?? {}) as Omit<TranscribePayload, 'jobId' | 'chunkId'>;
-  return enqueueTranscribeTask({ jobId, chunkId, ...(payload as any) });
+  console.info(
+    `[enqueueTranscribeTask] job=${jobId} idx=${idx} ${startSec}-${endSec}sec -> ${response.name}`
+  );
+
+  return response;
 }

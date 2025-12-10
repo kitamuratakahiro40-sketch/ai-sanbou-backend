@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,14 +7,125 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Job {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  plan          String    @default("FREE")
+  usageCount    Int       @default(0)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  accounts      Account[]
+  jobs          Job[]
+  projects      Project[]
+  sessions      Session[]
 
-  status    String   @default("pending") // e.g., pending, processing, completed, failed
-  gcsUri    String
-  
-  // Add other columns as needed by your application
-  // result    Json?
+  @@map("users")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  contextData String?
+  userId      String
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  jobs        Job[]
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("projects")
+}
+
+model Job {
+  id                String       @id @default(uuid())
+  sourceUrl         String?      @map("source_uri")
+  narrative         String?
+  risks             String?
+  score             Int?
+  userId            String
+  projectId         String?
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+  deletedAt         DateTime?    @map("deleted_at")
+  docType           String?      @map("doc_type")
+  durationSec       Int?
+  errorMessage      String?      @map("error_message")
+  fileName          String?
+  inputType         InputType    @default(AUDIO)
+  mode              SecurityMode @default(NORMAL)
+  rawText           String?      @map("raw_text")
+  reporterName      String?      @map("reporter_name")
+  slideUrl          String?      @map("slide_url")
+  summaryReport     String?
+  summaryActionJson Json?        @map("summary_action_json")
+  targetName        String?      @map("target_name")
+  transcript        String?
+  status            JobStatus    @default(UPLOADED)
+  summary           String?
+  project           Project?     @relation(fields: [projectId], references: [id])
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("jobs")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+enum JobStatus {
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SecurityMode {
+  NORMAL
+  ANONYMOUS
+  STEALTH
+}
+
+enum InputType {
+  AUDIO
+  TEXT
 }
