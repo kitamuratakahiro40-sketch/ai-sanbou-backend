@@ -1,25 +1,21 @@
 import type { Metadata } from "next";
-import "./globals.css";
-import { Providers } from "@/components/Providers"; // または "../components/Providers"
+import "./globals.css"; // ★ここでCSSを読み込みます
 
 export const metadata: Metadata = {
-  title: "AI参謀 - Sanbou AI",
-  description: "AI-powered meeting minutes and insights",
+  title: "Sanbou-AI v2.0",
+  description: "AI参謀 - Intelligence Hub",
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: React.ReactNode;
-}) {
+}>) {
   return (
     <html lang="ja">
-      <body>
-        {/* AuthProvider は削除しました。NextAuthはサーバーサイドでセッションを管理するため、
-            クライアント側のProviderは必須ではありません（必要な場合のみSessionProviderを追加） */}
-        <Providers>
-        　{children}
-        </Providers>
+      {/* 背景色をglobals.cssで指定した変数に合わせる */}
+      <body className="bg-sanbou-dark text-sanbou-light min-h-screen">
+        {children}
       </body>
     </html>
   );

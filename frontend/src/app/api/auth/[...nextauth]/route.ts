@@ -1,3 +1,2 @@
-import { handlers } from "@/auth" // src/auth.ts から読み込み
-
-export const { GET, POST } = handlers
+import { handlers } from "../../../../auth"; 
+export const { GET, POST } = handlers;

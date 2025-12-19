@@ -7,125 +7,98 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  plan          String    @default("FREE")
-  usageCount    Int       @default(0)
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-  accounts      Account[]
-  jobs          Job[]
-  projects      Project[]
-  sessions      Session[]
+// --- Models ---
 
-  @@map("users")
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  plan        String   @default("FREE") // FREE, ALPHA_50
+  gammaCount  Int      @default(0)      // 月間生成数制限用
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ★Jobとのリレーションは現在未使用のためコメントアウト（エラー回避）
+  // jobs        Job[]
+  projects    Project[]
 }
 
 model Project {
   id          String   @id @default(cuid())
+  userId      String
   name        String
   description String?
-  contextData String?
-  userId      String
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  jobs        Job[]
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contextData String?  @db.Text // RAG用コンテキスト
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  @@unique([userId, name])
-  @@index([userId])
-  @@map("projects")
+  user        User     @relation(fields: [userId], references: [id])
+  // ★Jobとのリレーションは現在未使用のためコメントアウト
+  // jobs        Job[]
 }
 
 model Job {
-  id                String       @id @default(uuid())
-  sourceUrl         String?      @map("source_uri")
-  narrative         String?
-  risks             String?
-  score             Int?
-  userId            String
-  projectId         String?
-  createdAt         DateTime     @default(now()) @map("created_at")
-  updatedAt         DateTime     @updatedAt @map("updated_at")
-  deletedAt         DateTime?    @map("deleted_at")
-  docType           String?      @map("doc_type")
-  durationSec       Int?
-  errorMessage      String?      @map("error_message")
-  fileName          String?
-  inputType         InputType    @default(AUDIO)
-  mode              SecurityMode @default(NORMAL)
-  rawText           String?      @map("raw_text")
-  reporterName      String?      @map("reporter_name")
-  slideUrl          String?      @map("slide_url")
-  summaryReport     String?
-  summaryActionJson Json?        @map("summary_action_json")
-  targetName        String?      @map("target_name")
-  transcript        String?
-  status            JobStatus    @default(UPLOADED)
-  summary           String?
-  project           Project?     @relation(fields: [projectId], references: [id])
-  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String   @id @default(uuid())
+  
+  // ★重要: ログイン機能未実装のため、User/Projectとの紐付けを一時的に無効化
+  // userId       String
+  // user         User     @relation(fields: [userId], references: [id])
+  // projectId    String?
+  // project      Project? @relation(fields: [projectId], references: [id])
 
-  @@index([userId, status])
-  @@map("jobs")
+  // --- Metadata ---
+  tags         String?
+  clientName   String?
+  projectName  String?
+  
+  // --- Settings ---
+  type         JobType      @default(AUDIO)
+  status       JobStatus    @default(UPLOADED)
+  security     SecurityMode @default(CONFIDENTIAL)
+
+  // --- Input ---
+  sourceUrl    String?
+  rawText      String?  @db.Text
+  fileName     String?
+
+  // --- Outputs ---
+  transcript   String?  @db.Text
+  narrative    String?  @db.Text
+  shieldOutput String?  @db.Text
+  spearOutput  Json?
+  
+  // --- New Features ---
+  pptOutput    String?  @db.Text // PPT下書き
+  metrics      Json?             // 感情分析
+  speakerMap   Json?             // 話者名マッピング
+  
+  // --- Others ---
+  slideUrl     String?
+  errorMessage String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
 
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+// --- Enums (定義はここ1箇所に統一) ---
 
-  @@unique([provider, providerAccountId])
-  @@map("accounts")
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("sessions")
-}
-
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
-  @@map("verification_tokens")
+enum JobType {
+  AUDIO
+  VIDEO
+  TEXT
 }
 
 enum JobStatus {
   UPLOADED
+  QUEUED
   PROCESSING
   COMPLETED
   FAILED
 }
 
 enum SecurityMode {
-  NORMAL
+  CONFIDENTIAL
   ANONYMOUS
-  STEALTH
-}
-
-enum InputType {
-  AUDIO
-  TEXT
 }
