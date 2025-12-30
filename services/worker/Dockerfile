@@ -1,26 +1,22 @@
-FROM node:20-bullseye
-
-# ▼ ffmpeg / ffprobe をインストール（ここが今回のポイント）
-RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends ffmpeg \
-  && rm -rf /var/lib/apt/lists/*
-
+# 修正版：services/worker/Dockerfile
+FROM node:20-slim AS builder
 WORKDIR /app
-
+# ビルドに必要な最小限の部品をインストール
+RUN apt-get update -y && apt-get install -y openssl
 COPY package*.json ./
-# ビルド用に dev も入れる
-RUN npm install --include=dev --no-audit --no-fund
+RUN npm install
+COPY . .
+RUN npx prisma generate
+RUN npm run build
 
-COPY tsconfig.json ./
-COPY src ./src
+FROM node:20-slim
+WORKDIR /app
+# 実行環境にも openssl を入れる
+RUN apt-get update -y && apt-get install -y openssl
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
 
-# TypeScript ビルド
-RUN npx tsc -p tsconfig.json
-
-# 本番は prod 依存だけに絞る
-RUN npm prune --omit=dev
-
-ENV NODE_ENV=production
 EXPOSE 8080
-
-CMD ["node", "dist/worker.js"]
+CMD ["node", "dist/index.js"]

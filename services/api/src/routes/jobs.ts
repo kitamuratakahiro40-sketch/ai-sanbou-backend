@@ -1,150 +1,168 @@
-import { Router } from 'express';
-import multer from 'multer';
-import { PrismaClient, JobType, JobStatus, SecurityMode } from '@prisma/client';
-import { Storage } from '@google-cloud/storage';
-import { Queue } from 'bullmq'; // ★追加
+import { Router, Request, Response } from 'express';
+import { PrismaClient, JobStatus, SecurityMode } from '@prisma/client';
+import { Queue } from 'bullmq';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 const prisma = new PrismaClient();
-const storage = new Storage();
-const upload = multer({ storage: multer.memoryStorage() });
 
-const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'ai-sanbou-bucket';
+// Redis接続設定 (環境変数 または デフォルト)
+const REDIS_URL = process.env.REDIS_URL || 'redis://10.56.141.51:6379'; // チャゲ先輩のIPを保持
+const connection = {
+  host: '10.56.141.51', 
+  port: 6379,
+  // ※本番環境(Cloud Run)でRedis URL環境変数がある場合はそちらを優先するロジックを入れるのがベスト
+};
 
-// ★Redisキューの設定（Workerと同じ設定にする）
-const jobQueue = new Queue('job-queue', {
-  connection: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-  }
-});
+const QUEUE_NAME = 'sanbou-job-queue'; // Worker側と合わせる必要があります
+const jobQueue = new Queue(QUEUE_NAME, { connection });
 
-// 一覧取得
-router.get('/', async (req, res) => {
+// ---------------------------------------------------------
+// 1. GET / (一覧取得)
+// ---------------------------------------------------------
+router.get('/', async (req: Request, res: Response) => {
   try {
-    const jobs = await prisma.job.findMany({ orderBy: { createdAt: 'desc' } });
-    res.json({ jobs });
+    const { userId } = req.query;
+    console.log(`📡 [GET] Fetching jobs for user: ${userId}`);
+    const jobs = await prisma.job.findMany({
+      where: { userId: userId ? String(userId) : undefined },
+      orderBy: { createdAt: 'desc' }
+    });
+    return res.json({ jobs });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch jobs' });
+    console.error('❌ [GET] Error:', error);
+    return res.status(500).json({ error: 'DB Fetch Failed' });
   }
 });
 
-// 詳細取得
-router.get('/:id', async (req, res) => {
+// ---------------------------------------------------------
+// 2. GET /:id (詳細取得) - ポーリング用
+// ---------------------------------------------------------
+router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+    const { id } = req.params;
+    const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return res.status(404).json({ error: 'Job not found' });
-    res.json({ job });
+    return res.json({ job });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch job' });
+    return res.status(500).json({ error: 'DB Error' });
   }
 });
 
-// ★新規作成（ここが修正のメイン）
-router.post('/', upload.single('file'), async (req: any, res: any) => {
+// ---------------------------------------------------------
+// 3. POST / (新規ジョブ作成) - FileUploaderから呼ばれる
+// ---------------------------------------------------------
+router.post('/', async (req: Request, res: Response) => {
   try {
-    console.log('📝 New Job Request');
+    // ★重要: multerは削除しました。FrontendからJSONでパスだけ送られてくるためです。
+    console.log("📦 [DEBUG] Received Body:", JSON.stringify(req.body, null, 2));
+    const { gcsPath, userId, projectName, securityMode } = req.body;
     
-    if (!req.file && !req.body.rawText) {
-      return res.status(400).json({ error: 'No file or content provided' });
-    }
+    // ガード: 必須項目チェック
+    if (!gcsPath) return res.status(400).json({ error: 'gcsPath is required' });
 
-    const jobId = uuidv4();
-    let sourceUrl = '';
-    let type: JobType = 'AUDIO'; 
+    const targetUserId = String(userId || 'cmjfb9m620000clqy27f31wo4'); // 固定IDフォールバック
 
-    // GCSアップロード処理
-    if (req.file) {
-      const blob = storage.bucket(BUCKET_NAME).file(`uploads/${jobId}/${req.file.originalname}`);
-      await blob.save(req.file.buffer);
-      sourceUrl = `gs://${BUCKET_NAME}/uploads/${jobId}/${req.file.originalname}`;
-      
-      if (req.file.mimetype.startsWith('audio/')) type = 'AUDIO';
-      else if (req.file.mimetype.startsWith('video/')) type = 'VIDEO';
-      else type = 'TEXT';
-    } else if (req.body.rawText) {
-      type = 'TEXT';
-    }
+    console.log(`📡 [POST] New Job Request: ${projectName} (${gcsPath})`);
 
-    // 1. DB保存
+    // ユーザー自動生成 (P2003回避)
+    await prisma.user.upsert({
+      where: { id: targetUserId },
+      update: {},
+      create: { id: targetUserId, email: `user-${targetUserId}@example.com`, name: 'Test User' }
+    });
+
+    // DB作成
     const job = await prisma.job.create({
       data: {
-        id: jobId,
-        projectName: req.body.projectName || 'Untitled Project',
-        clientName: req.body.clientName || '',
-        type: type,
-        status: JobStatus.QUEUED, // 最初からQUEUEDにする
-        sourceUrl: sourceUrl,
-        rawText: req.body.rawText || '',
-        security: SecurityMode.CONFIDENTIAL,
+        id: uuidv4(),
+        projectName: projectName || 'Untitled Project',
+        userId: targetUserId,
+        type: 'AUDIO',
+        status: JobStatus.QUEUED,
+        sourceUrl: `gs://sanbou-ai-transcripts/${gcsPath}`, // バケット名は環境変数推奨だが一旦固定
+        security: (securityMode as SecurityMode) || SecurityMode.CONFIDENTIAL,
       }
     });
 
-    console.log(`✅ DB Saved: ${job.id}`);
-
-    // 2. ★Workerへ通知（これを忘れていました！）
-    // 音声なら文字起こし(TRANSCRIBE)、テキストなら要約(NARRATIVE)へ
-    const action = type === 'TEXT' ? 'NARRATIVE' : 'TRANSCRIBE';
-    
+    // Workerへ指令 (文字起こし開始)
     await jobQueue.add('process-job', { 
       jobId: job.id, 
-      action: action 
+      action: 'TRANSCRIBE' // 最初のステップ
     });
-    
-    console.log(`🚀 Queue Added: ${job.id} (Action: ${action})`);
 
-    res.json({ job });
+    return res.status(200).json({ job });
 
-  } catch (error) {
-    console.error('Error creating job:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+  } catch (error: any) {
+    console.error('❌ [POST] Error:', error);
+    return res.status(500).json({ error: 'Job Creation Failed', detail: error.message });
   }
 });
 
-// 分析リクエスト (再実行・翻訳・部分要約など)
-router.post('/:id/analyze', async (req, res) => {
+// ---------------------------------------------------------
+// 4. POST /:id/analyze (追加分析・アクション) - 詳細画面から呼ばれる
+// ---------------------------------------------------------
+router.post('/:id/analyze', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { type, textContext, targetLang, sourceText } = req.body;
+    const { type, ...options } = req.body; // type: 'PPT' | 'TRANSLATE' | 'NARRATIVE' ...
 
-    console.log(`📡 Analysis Requested for Job ${id}: ${type}`);
+    console.log(`📡 [ANALYZE] Job: ${id}, Action: ${type}`);
 
-    // Workerへ通知
-    await jobQueue.add('process-job', { 
-        jobId: id, 
-        action: type,
-        options: { textContext, targetLang, sourceText }
+    // DB確認
+    const job = await prisma.job.findUnique({ where: { id } });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    // ステータスを更新してユーザーに「反応」を返す
+    await prisma.job.update({
+        where: { id },
+        data: { status: JobStatus.QUEUED } // 再度キューに入れるのでQUEUEDへ
     });
 
-    res.json({ success: true });
+    // Workerへ指令 (追加タスク)
+    await jobQueue.add('process-job', {
+      jobId: id,
+      action: type, // 'PPT' や 'TRANSLATE' がここに入る
+      options: options // targetLang などのオプション
+    });
 
-  } catch (error) {
-    console.error('Analyze request error:', error);
-    res.status(500).json({ error: 'Failed to request analysis' });
+    return res.json({ success: true, message: `Action ${type} queued.` });
+
+  } catch (error: any) {
+    console.error('❌ [ANALYZE] Error:', error);
+    return res.status(500).json({ error: 'Analysis Request Failed' });
   }
 });
 
-// 削除
-router.delete('/:id', async (req, res) => {
+// ---------------------------------------------------------
+// 5. PATCH /:id (メタデータ更新) - 保存ボタン用
+// ---------------------------------------------------------
+router.patch('/:id', async (req: Request, res: Response) => {
   try {
-    await prisma.job.delete({ where: { id: req.params.id } });
-    res.json({ success: true });
+    const { id } = req.params;
+    const data = req.body; // projectName, speakerMap, transcript編集結果など
+
+    await prisma.job.update({
+      where: { id },
+      data: data
+    });
+
+    return res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete job' });
+    return res.status(500).json({ error: 'Update Failed' });
   }
 });
 
-// メタデータ更新
-router.patch('/:id', async (req, res) => {
+// ---------------------------------------------------------
+// 6. DELETE /:id (削除)
+// ---------------------------------------------------------
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const job = await prisma.job.update({
-      where: { id: req.params.id },
-      data: req.body
-    });
-    res.json({ job });
+    const { id } = req.params;
+    await prisma.job.delete({ where: { id } });
+    return res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: 'Update failed' });
+    return res.status(500).json({ error: 'Delete Failed' });
   }
 });
 

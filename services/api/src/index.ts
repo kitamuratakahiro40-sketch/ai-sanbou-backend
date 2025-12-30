@@ -1,35 +1,40 @@
 import express from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
-import jobRoutes from './routes/jobs';
-
-dotenv.config();
+import cookieParser from 'cookie-parser';
+import jobsRouter from './routes/jobs';
+import uploadRouter from './routes/upload';
 
 const app = express();
-const port = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
-// ★ここが修正ポイント: CORSを最強設定にする
+// 1. CORS設定 (ヘッダーを明示的に許可)
 app.use(cors({
-  origin: true, // すべてのオリジンを許可（スマホからのアクセスを拒否しない）
+  origin: true,
   credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], // OPTIONSを明示的に許可
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'] 
 }));
 
-// プリフライトリクエスト(OPTIONS)を強制的にOKにする
-app.options('*', cors());
-
-app.use(express.json());
-
-// ルート設定
-app.use('/api/jobs', jobRoutes);
-
-// ヘルスチェック用
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date() });
+// 2. ログ出力 (デバッグ用: ここでヘッダーを確認します)
+app.use((req, res, next) => {
+  console.log(`🔍 [Incoming] ${req.method} ${req.url}`);
+  console.log('   Headers:', JSON.stringify(req.headers)); // ★ヘッダーをすべて記録
+  next();
 });
 
-// サーバー起動 (0.0.0.0 で待ち受け)
-app.listen(Number(port), '0.0.0.0', () => {
-  console.log(`🚀 API Server running on port ${port} (Accessible from Mobile)`);
+// 3. JSON翻訳機 (ここが最重要！)
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// --- Routes ---
+app.get('/', (req, res) => {
+  res.status(200).send('API is running');
+});
+
+app.use('/api/jobs', jobsRouter);
+app.use('/api/upload', uploadRouter);
+
+// --- Server Start ---
+app.listen(PORT, () => {
+  console.log(`🚀 API Service listening on port ${PORT}`);
 });

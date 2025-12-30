@@ -19,8 +19,10 @@
     "bullmq": "^5.66.1",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
+    "ioredis": "^5.8.2",
     "pg": "^8.11.5",
-    "prisma": "5.22.0"
+    "prisma": "5.22.0",
+    "undici": "^7.16.0"
   },
   "devDependencies": {
     "@types/body-parser": "^1.19.5",

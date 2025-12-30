@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 
+// 🌟 環境変数から API のフルパスを取得（昨夜設定した Cloud Run の URL です）
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api-service-649523701953.asia-northeast1.run.app';
+
 export default function UploadPage() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
@@ -12,44 +15,44 @@ export default function UploadPage() {
   const [securityMode, setSecurityMode] = useState('NORMAL');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // ファイルが存在する場合のみ処理
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      // 1. ReactのStateにファイルを保存（これでアプリ側はファイルを保持できる）
       setFile(e.target.files[0]);
     }
-    
-    // 2. 【追加】HTMLのinputタグ自体はクリアする
-    // これにより、ブラウザは「ファイル未選択状態」に戻るため、
-    // 次に同じファイルを選んでも「新しい選択（変更）」として検知してくれます。
     e.target.value = ''; 
   };
 
-  const handleUpload = async () => {
-    if (!file) return;
-    setIsUploading(true);
+  // handleUpload 関数の中身を以下に差し替え
+const handleUpload = async () => {
+  if (!file) return;
+  setIsUploading(true);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('securityMode', securityMode);
-      // ★入力項目は削除しました
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('securityMode', securityMode);
+    // 🌟 ここで userId を追加！ (固定IDまたはセッションから)
+    formData.append('userId', 'cmjfb9m620000clqy27f31wo4'); 
+    formData.append('projectName', file.name);
 
-      // ★MacのIPアドレス (確認済み: 192.168.0.248)
-      const API_URL = 'http://192.168.0.248:3001/api/jobs'; 
+    const res = await fetch(`${API_BASE_URL}/api/jobs`, {
+      method: 'POST',
+      body: formData,
+      mode: 'cors',
+    });
 
-      const res = await fetch(API_URL, {
-        method: 'POST',
-        body: formData,
-        mode: 'cors',
-      });
+      if (!res.ok) {
+        // 🌟 エラー時、JSON で詳細が返ってくるはずなので解析します
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || errorData.message || 'Upload failed');
+      }
 
-      if (!res.ok) throw new Error('Upload failed');
       const data = await res.json();
       router.push(`/jobs/${data.job.id}`);
 
-    } catch (error) {
-      alert(`Upload Error: ${error}`);
+    } catch (error: any) {
+      console.error('❌ Upload Error Detail:', error);
+      alert(`Upload Error: ${error.message}`);
     } finally {
       setIsUploading(false);
     }

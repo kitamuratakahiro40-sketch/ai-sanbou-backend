@@ -1,20 +1,38 @@
-import NextAuth from "next-auth"
-import Google from "next-auth/providers/google"
-import { PrismaAdapter } from "@auth/prisma-adapter"
-import { PrismaClient } from "@prisma/client"
+import NextAuth, { NextAuthOptions } from "next-auth";
+import GoogleProvider from "next-auth/providers/google";
+import { PrismaAdapter } from "@auth/prisma-adapter";
+import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient()
+const prisma = new PrismaClient();
 
-// 👇 ここで handlers をエクスポートしているのが重要です
-export const { handlers, auth, signIn, signOut } = NextAuth({
+// v4では「authOptions」という名前で設定をエクスポートするのが標準です
+export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
-  providers: [Google],
+  // セッションの持ち方を JWT に設定
+  session: {
+    strategy: "jwt", 
+  },
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+  ],
+  // JWT にユーザーIDを含めるための設定を追加
   callbacks: {
-    session({ session, user }) {
-      if (session.user) {
-        session.user.id = user.id
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
       }
-      return session
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user) {
+        // @ts-ignore
+        session.user.id = token.id;
+      }
+      return session;
     },
   },
-})
+  secret: process.env.NEXTAUTH_SECRET,
+};
