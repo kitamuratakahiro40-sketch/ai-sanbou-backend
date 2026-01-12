@@ -6,15 +6,14 @@ import { v4 as uuidv4 } from 'uuid';
 const router = Router();
 const prisma = new PrismaClient();
 
-// Redis接続設定 (環境変数 または デフォルト)
-const REDIS_URL = process.env.REDIS_URL || 'redis://10.56.141.51:6379'; // チャゲ先輩のIPを保持
+// Redis接続設定
+const REDIS_URL = process.env.REDIS_URL || 'redis://10.56.141.51:6379';
 const connection = {
   host: '10.56.141.51', 
   port: 6379,
-  // ※本番環境(Cloud Run)でRedis URL環境変数がある場合はそちらを優先するロジックを入れるのがベスト
 };
 
-const QUEUE_NAME = 'sanbou-job-queue'; // Worker側と合わせる必要があります
+const QUEUE_NAME = 'sanbou-job-queue'; 
 const jobQueue = new Queue(QUEUE_NAME, { connection });
 
 // ---------------------------------------------------------
@@ -23,9 +22,15 @@ const jobQueue = new Queue(QUEUE_NAME, { connection });
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { userId } = req.query;
+    
+    // ★修正: userIdがない場合はエラーにする（セキュリティ強化）
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
     console.log(`📡 [GET] Fetching jobs for user: ${userId}`);
     const jobs = await prisma.job.findMany({
-      where: { userId: userId ? String(userId) : undefined },
+      where: { userId: String(userId) },
       orderBy: { createdAt: 'desc' }
     });
     return res.json({ jobs });
@@ -36,7 +41,7 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
-// 2. GET /:id (詳細取得) - ポーリング用
+// 2. GET /:id (詳細取得)
 // ---------------------------------------------------------
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -50,22 +55,26 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
-// 3. POST / (新規ジョブ作成) - FileUploaderから呼ばれる
+// 3. POST / (新規ジョブ作成)
 // ---------------------------------------------------------
 router.post('/', async (req: Request, res: Response) => {
   try {
-    // ★重要: multerは削除しました。FrontendからJSONでパスだけ送られてくるためです。
     console.log("📦 [DEBUG] Received Body:", JSON.stringify(req.body, null, 2));
     const { gcsPath, userId, projectName, securityMode } = req.body;
     
     // ガード: 必須項目チェック
     if (!gcsPath) return res.status(400).json({ error: 'gcsPath is required' });
 
-    const targetUserId = String(userId || 'cmjfb9m620000clqy27f31wo4'); // 固定IDフォールバック
+    // 🚨【修正箇所】 固定IDフォールバックを完全削除
+    if (!userId) {
+       console.error("❌ [POST] Missing User ID");
+       return res.status(400).json({ error: 'User ID is required. Please login.' });
+    }
+    const targetUserId = String(userId); 
 
     console.log(`📡 [POST] New Job Request: ${projectName} (${gcsPath})`);
 
-    // ユーザー自動生成 (P2003回避)
+    // ユーザー自動生成
     await prisma.user.upsert({
       where: { id: targetUserId },
       update: {},
@@ -80,15 +89,15 @@ router.post('/', async (req: Request, res: Response) => {
         userId: targetUserId,
         type: 'AUDIO',
         status: JobStatus.QUEUED,
-        sourceUrl: `gs://sanbou-ai-transcripts/${gcsPath}`, // バケット名は環境変数推奨だが一旦固定
+        sourceUrl: `gs://sanbou-ai-transcripts/${gcsPath}`,
         security: (securityMode as SecurityMode) || SecurityMode.CONFIDENTIAL,
       }
     });
 
-    // Workerへ指令 (文字起こし開始)
+    // Workerへ指令
     await jobQueue.add('process-job', { 
       jobId: job.id, 
-      action: 'TRANSCRIBE' // 最初のステップ
+      action: 'TRANSCRIBE' 
     });
 
     return res.status(200).json({ job });
@@ -100,30 +109,27 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
-// 4. POST /:id/analyze (追加分析・アクション) - 詳細画面から呼ばれる
+// 4. POST /:id/analyze (追加分析)
 // ---------------------------------------------------------
 router.post('/:id/analyze', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { type, ...options } = req.body; // type: 'PPT' | 'TRANSLATE' | 'NARRATIVE' ...
+    const { type, ...options } = req.body; 
 
     console.log(`📡 [ANALYZE] Job: ${id}, Action: ${type}`);
 
-    // DB確認
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    // ステータスを更新してユーザーに「反応」を返す
     await prisma.job.update({
         where: { id },
-        data: { status: JobStatus.QUEUED } // 再度キューに入れるのでQUEUEDへ
+        data: { status: JobStatus.QUEUED } 
     });
 
-    // Workerへ指令 (追加タスク)
     await jobQueue.add('process-job', {
       jobId: id,
-      action: type, // 'PPT' や 'TRANSLATE' がここに入る
-      options: options // targetLang などのオプション
+      action: type,
+      options: options 
     });
 
     return res.json({ success: true, message: `Action ${type} queued.` });
@@ -135,20 +141,30 @@ router.post('/:id/analyze', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
-// 5. PATCH /:id (メタデータ更新) - 保存ボタン用
+// 5. PATCH /:id (メタデータ更新・Workerからの完了報告)
 // ---------------------------------------------------------
 router.patch('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const data = req.body; // projectName, speakerMap, transcript編集結果など
+    
+    // 🚨 修正前: const data = req.body; 
+    // これだとWorkerが送ってきた "古いuserId" でDBを上書きしてしまう
+
+    // ✅ 修正後: userId が送られてきても無視（除外）する
+    // ...data には userId 以外のデータ（status, transcriptなど）が入る
+    const { userId, ...updateData } = req.body; 
+
+    console.log(`📝 [PATCH] Updating Job: ${id}`);
+    // console.log("Ignore userId update for security"); 
 
     await prisma.job.update({
       where: { id },
-      data: data
+      data: updateData // userIdを含まないデータだけで更新
     });
 
     return res.json({ success: true });
   } catch (error) {
+    console.error('❌ [PATCH] Error:', error);
     return res.status(500).json({ error: 'Update Failed' });
   }
 });

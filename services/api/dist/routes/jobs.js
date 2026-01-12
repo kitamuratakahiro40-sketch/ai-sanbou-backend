@@ -1,131 +1,165 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
-const bull_1 = __importDefault(require("bull"));
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const multer_1 = __importDefault(require("multer")); // 追加
+const bullmq_1 = require("bullmq");
+const uuid_1 = require("uuid");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
-const jobQueue = new bull_1.default('job-queue', {
-    redis: { host: process.env.REDIS_HOST || '127.0.0.1', port: 6379 }
-});
-// ★ファイルの保存場所と名前の設定
-const UPLOAD_DIR = path_1.default.join(__dirname, '../../uploads');
-if (!fs_1.default.existsSync(UPLOAD_DIR)) {
-    fs_1.default.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-const storage = multer_1.default.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, UPLOAD_DIR);
-    },
-    filename: (req, file, cb) => {
-        // 日本語ファイル名文字化け対策 & 重複回避
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        // 元の拡張子を維持
-        const ext = path_1.default.extname(file.originalname);
-        cb(null, file.fieldname + '-' + uniqueSuffix + ext);
-    }
-});
-const upload = (0, multer_1.default)({ storage: storage });
-// 1. ジョブ一覧取得
+// Redis接続設定
+const REDIS_URL = process.env.REDIS_URL || 'redis://10.56.141.51:6379';
+const connection = {
+    host: '10.56.141.51',
+    port: 6379,
+};
+const QUEUE_NAME = 'sanbou-job-queue';
+const jobQueue = new bullmq_1.Queue(QUEUE_NAME, { connection });
+// ---------------------------------------------------------
+// 1. GET / (一覧取得)
+// ---------------------------------------------------------
 router.get('/', async (req, res) => {
     try {
-        const jobs = await prisma.job.findMany({ orderBy: { createdAt: 'desc' }, take: 20 });
-        res.json({ jobs });
+        const { userId } = req.query;
+        // ★修正: userIdがない場合はエラーにする（セキュリティ強化）
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+        console.log(`📡 [GET] Fetching jobs for user: ${userId}`);
+        const jobs = await prisma.job.findMany({
+            where: { userId: String(userId) },
+            orderBy: { createdAt: 'desc' }
+        });
+        return res.json({ jobs });
     }
     catch (error) {
-        res.status(500).json({ error: 'Error fetching jobs' });
+        console.error('❌ [GET] Error:', error);
+        return res.status(500).json({ error: 'DB Fetch Failed' });
     }
 });
-// 2. ジョブ詳細取得
+// ---------------------------------------------------------
+// 2. GET /:id (詳細取得)
+// ---------------------------------------------------------
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const job = await prisma.job.findUnique({ where: { id } });
         if (!job)
             return res.status(404).json({ error: 'Job not found' });
-        res.json({ job });
+        return res.json({ job });
     }
     catch (error) {
-        res.status(500).json({ error: 'Error fetching job' });
+        return res.status(500).json({ error: 'DB Error' });
     }
 });
-// 3. ★新規ジョブ作成 (ファイルアップロード対応)
-// upload.single('file') がスマホからのファイルを受け止めます
-router.post('/', upload.single('file'), async (req, res) => {
+// ---------------------------------------------------------
+// 3. POST / (新規ジョブ作成)
+// ---------------------------------------------------------
+router.post('/', async (req, res) => {
     try {
-        console.log('📂 Upload Request Received');
-        let finalSourceUrl = "";
-        let fileName = "";
-        let type = "AUDIO";
-        const securityMode = req.body.securityMode || 'NORMAL';
-        // A. ファイルがアップロードされた場合 (スマホ/PCから)
-        if (req.file) {
-            console.log(`✅ File uploaded: ${req.file.filename}`);
-            finalSourceUrl = req.file.path; // 保存されたパス
-            fileName = Buffer.from(req.file.originalname, 'latin1').toString('utf8'); // 文字化け対策（簡易）
-            // 拡張子でタイプ判定
-            if (fileName.endsWith('.txt'))
-                type = 'TEXT';
-            // 文字化け補正がうまくいかない場合のフォールバック
-            if (!fileName || fileName.includes('??'))
-                fileName = req.file.originalname;
+        console.log("📦 [DEBUG] Received Body:", JSON.stringify(req.body, null, 2));
+        const { gcsPath, userId, projectName, securityMode } = req.body;
+        // ガード: 必須項目チェック
+        if (!gcsPath)
+            return res.status(400).json({ error: 'gcsPath is required' });
+        // 🚨【修正箇所】 固定IDフォールバックを完全削除
+        if (!userId) {
+            console.error("❌ [POST] Missing User ID");
+            return res.status(400).json({ error: 'User ID is required. Please login.' });
         }
-        // B. テキスト直接入力やパス指定の場合 (旧互換)
-        else {
-            const { content, storagePath, fileName: reqFileName, type: reqType } = req.body;
-            fileName = reqFileName || 'Untitled';
-            type = reqType || 'AUDIO';
-            if (content) {
-                type = 'TEXT';
-                const txtPath = path_1.default.join(UPLOAD_DIR, `text-${Date.now()}.txt`);
-                fs_1.default.writeFileSync(txtPath, content);
-                finalSourceUrl = txtPath;
-            }
-            else {
-                finalSourceUrl = storagePath;
-            }
-        }
-        let user = await prisma.user.findFirst();
-        if (!user)
-            user = await prisma.user.create({ data: { email: 'demo@example.com', name: 'Demo User' } });
+        const targetUserId = String(userId);
+        console.log(`📡 [POST] New Job Request: ${projectName} (${gcsPath})`);
+        // ユーザー自動生成
+        await prisma.user.upsert({
+            where: { id: targetUserId },
+            update: {},
+            create: { id: targetUserId, email: `user-${targetUserId}@example.com`, name: 'Test User' }
+        });
+        // DB作成
         const job = await prisma.job.create({
             data: {
-                userId: user.id,
-                type: type === 'TEXT' ? 'TEXT' : 'AUDIO',
-                sourceUrl: finalSourceUrl,
-                fileName: fileName,
-                status: 'QUEUED',
-                security: securityMode
+                id: (0, uuid_1.v4)(),
+                projectName: projectName || 'Untitled Project',
+                userId: targetUserId,
+                type: 'AUDIO',
+                status: client_1.JobStatus.QUEUED,
+                sourceUrl: `gs://sanbou-ai-transcripts/${gcsPath}`,
+                security: securityMode || client_1.SecurityMode.CONFIDENTIAL,
             }
         });
-        await jobQueue.add({ jobId: job.id });
-        console.log(`🚀 Job ${job.id} queued!`);
-        res.json({ job });
+        // Workerへ指令
+        await jobQueue.add('process-job', {
+            jobId: job.id,
+            action: 'TRANSCRIBE'
+        });
+        return res.status(200).json({ job });
     }
     catch (error) {
-        console.error('Error creating job:', error);
-        res.status(500).json({ error: 'Failed to create job' });
+        console.error('❌ [POST] Error:', error);
+        return res.status(500).json({ error: 'Job Creation Failed', detail: error.message });
     }
 });
-// 4. 更新
+// ---------------------------------------------------------
+// 4. POST /:id/analyze (追加分析)
+// ---------------------------------------------------------
+router.post('/:id/analyze', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { type, ...options } = req.body;
+        console.log(`📡 [ANALYZE] Job: ${id}, Action: ${type}`);
+        const job = await prisma.job.findUnique({ where: { id } });
+        if (!job)
+            return res.status(404).json({ error: 'Job not found' });
+        await prisma.job.update({
+            where: { id },
+            data: { status: client_1.JobStatus.QUEUED }
+        });
+        await jobQueue.add('process-job', {
+            jobId: id,
+            action: type,
+            options: options
+        });
+        return res.json({ success: true, message: `Action ${type} queued.` });
+    }
+    catch (error) {
+        console.error('❌ [ANALYZE] Error:', error);
+        return res.status(500).json({ error: 'Analysis Request Failed' });
+    }
+});
+// ---------------------------------------------------------
+// 5. PATCH /:id (メタデータ更新・Workerからの完了報告)
+// ---------------------------------------------------------
 router.patch('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { speakerMap, tags } = req.body;
-        const updatedJob = await prisma.job.update({
+        // 🚨 修正前: const data = req.body; 
+        // これだとWorkerが送ってきた "古いuserId" でDBを上書きしてしまう
+        // ✅ 修正後: userId が送られてきても無視（除外）する
+        // ...data には userId 以外のデータ（status, transcriptなど）が入る
+        const { userId, ...updateData } = req.body;
+        console.log(`📝 [PATCH] Updating Job: ${id}`);
+        // console.log("Ignore userId update for security"); 
+        await prisma.job.update({
             where: { id },
-            data: { speakerMap, tags }
+            data: updateData // userIdを含まないデータだけで更新
         });
-        res.json({ success: true, job: updatedJob });
+        return res.json({ success: true });
     }
     catch (error) {
-        res.status(500).json({ error: 'Failed to update job' });
+        console.error('❌ [PATCH] Error:', error);
+        return res.status(500).json({ error: 'Update Failed' });
+    }
+});
+// ---------------------------------------------------------
+// 6. DELETE /:id (削除)
+// ---------------------------------------------------------
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await prisma.job.delete({ where: { id } });
+        return res.json({ success: true });
+    }
+    catch (error) {
+        return res.status(500).json({ error: 'Delete Failed' });
     }
 });
 exports.default = router;

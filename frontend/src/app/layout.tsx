@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import "./globals.css"; // ★ここでCSSを読み込みます
+import "./globals.css"; 
+import { Providers } from "./providers"; // 🌟 作ったばかりの配給係を読み込む
 
 export const metadata: Metadata = {
   title: "Sanbou-AI v2.0",
@@ -13,9 +14,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ja">
-      {/* 背景色をglobals.cssで指定した変数に合わせる */}
       <body className="bg-sanbou-dark text-sanbou-light min-h-screen">
-        {children}
+        {/* 🌟 アプリ全体を Providers で包むことで、どこでもログイン情報が使えるようになる */}
+        <Providers>
+          {children}
+        </Providers>
       </body>
     </html>
   );

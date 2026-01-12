@@ -3,6 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import jobsRouter from './routes/jobs';
 import uploadRouter from './routes/upload';
+import gammaRouter from './routes/gamma'; // 👈 1. 追加: Gamma窓口をインポート
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -14,14 +15,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'] 
 }));
 
-// 2. ログ出力 (デバッグ用: ここでヘッダーを確認します)
+// 2. ログ出力 (デバッグ用)
 app.use((req, res, next) => {
   console.log(`🔍 [Incoming] ${req.method} ${req.url}`);
-  console.log('   Headers:', JSON.stringify(req.headers)); // ★ヘッダーをすべて記録
+  // console.log('   Headers:', JSON.stringify(req.headers)); // ログがうるさければコメントアウトでもOK
   next();
 });
 
-// 3. JSON翻訳機 (ここが最重要！)
+// 3. JSON翻訳機
 app.use(express.json()); 
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -33,6 +34,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/jobs', jobsRouter);
 app.use('/api/upload', uploadRouter);
+app.use('/api/gamma', gammaRouter); // 👈 2. 追加: Gammaへの道を開通
 
 // --- Server Start ---
 app.listen(PORT, () => {

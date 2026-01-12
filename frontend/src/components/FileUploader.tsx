@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useRef, ChangeEvent } from "react";
+import { useSession } from "next-auth/react"; // 🌟 1. セッション機能を追加
 
-// 🌟 環境変数、または直接指定
+// 環境変数、または直接指定
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api-service-649523701953.asia-northeast1.run.app';
 
 interface FileUploaderProps {
@@ -10,6 +11,7 @@ interface FileUploaderProps {
 }
 
 export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
+  const { data: session } = useSession(); // 🌟 2. ログイン中のユーザー情報を取得
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -24,12 +26,18 @@ export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const handleUpload = async () => {
     if (!file) return;
 
+    // 🌟 3. ログインしていない場合はアップロードさせない（安全装置）
+    if (!session?.user?.id) {
+      alert("エラー: ユーザーIDが取得できません。再ログインしてください。");
+      return;
+    }
+
     setUploading(true);
     setProgress(5); 
 
     try {
       // 1. 署名付きURLを取得
-      const urlRes = await fetch(`${API_BASE_URL}/api/upload/signed-url`, { // ★エンドポイント確認: jobs.tsではなくupload.tsを見るならここ
+      const urlRes = await fetch(`${API_BASE_URL}/api/upload/signed-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileName: file.name, fileType: file.type }),
@@ -41,15 +49,13 @@ export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
         throw new Error(errData.detail || "署名付きURLの取得に失敗しました");
       }
 
-      // ★【修正ポイント】 変数名をAPIのレスポンスに合わせる
-      // APIは { uploadUrl, fileName } を返しています
       const { uploadUrl, fileName } = await urlRes.json();
       
       setProgress(15);
 
       // 2. GCSへ直接アップロード
       const xhr = new XMLHttpRequest();
-      xhr.open("PUT", uploadUrl, true); // ★修正: url -> uploadUrl
+      xhr.open("PUT", uploadUrl, true);
       xhr.setRequestHeader("Content-Type", file.type);
 
       xhr.upload.onprogress = (event) => {
@@ -63,15 +69,15 @@ export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
         if (xhr.status === 200) {
           setProgress(95);
           
-          // 3. APIへ分析依頼 (ここで400エラーが出ていた)
+          // 3. APIへ分析依頼
           console.log(`📡 [Direct Connect] POST to: ${API_BASE_URL}/api/jobs`);
           
           const jobRes = await fetch(`${API_BASE_URL}/api/jobs`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-              gcsPath: fileName,            // ★修正: gcsFileName -> fileName
-              userId: 'cmjfb9m620000clqy27f31wo4', 
+              gcsPath: fileName,
+              userId: session.user.id,     // 🌟 4. ここが最重要！固定IDをやめて、本人のIDを渡す
               projectName: file.name
             }),
             mode: 'cors',
@@ -108,7 +114,7 @@ export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
     }
   };
 
-  // ... (表示部分は変更なし)
+  // 表示部分はそのまま
   return (
     <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl max-w-2xl mx-auto">
       <div className="flex flex-col items-center gap-4">

@@ -2,36 +2,35 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const storage_1 = require("@google-cloud/storage");
-const uuid_1 = require("uuid");
 const router = (0, express_1.Router)();
 const storage = new storage_1.Storage();
-const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'sanbou-ai-transcripts-ap1';
+// ★重要: バケット名は jobs.ts に書いたものと合わせる必要があります
+// もしGCSのバケット名が違う場合は、ここを書き換えてください
+const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'sanbou-ai-transcripts';
 router.post('/signed-url', async (req, res) => {
     try {
         const { fileName, fileType } = req.body;
+        // ガード: ファイル名がない場合はエラー
         if (!fileName) {
-            res.status(400).json({ error: 'fileName is required' });
-            return;
+            console.error('❌ [Upload] FileName is missing');
+            return res.status(400).json({ error: 'FileName is required' });
         }
-        const uniqueFileName = `${Date.now()}-${(0, uuid_1.v4)()}-${fileName}`;
-        const file = storage.bucket(BUCKET_NAME).file(uniqueFileName);
-        const options = {
+        console.log(`🎫 [Upload] Generating Signed URL for: ${fileName}`);
+        const bucket = storage.bucket(BUCKET_NAME);
+        const file = bucket.file(fileName);
+        // 署名付きURLの発行 (有効期限: 15分)
+        const [url] = await file.getSignedUrl({
             version: 'v4',
             action: 'write',
             expires: Date.now() + 15 * 60 * 1000,
             contentType: fileType || 'application/octet-stream',
-        };
-        const [url] = await file.getSignedUrl(options);
-        console.log(`🔑 Signed URL generated for: ${uniqueFileName}`);
-        res.json({
-            uploadUrl: url,
-            storagePath: `gs://${BUCKET_NAME}/${uniqueFileName}`,
-            fileName: uniqueFileName
         });
+        // フロントエンドに返す (uploadUrl と fileName)
+        return res.json({ uploadUrl: url, fileName });
     }
     catch (error) {
-        console.error('Error generating signed URL:', error);
-        res.status(500).json({ error: 'Failed to generate upload URL' });
+        console.error('❌ [Upload] Signed URL Error:', error);
+        return res.status(500).json({ error: 'Failed to generate Signed URL', detail: error.message });
     }
 });
 exports.default = router;

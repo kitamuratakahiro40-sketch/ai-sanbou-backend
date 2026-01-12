@@ -15,7 +15,7 @@ model User {
   email         String    @unique
   emailVerified DateTime?
   image         String?
-  plan          UserPlan  @default(FREE) // ★Enum管理に変更
+  plan          UserPlan  @default(FREE)
   gammaCount    Int       @default(0)    // 月間生成数制限用
   
   createdAt     DateTime  @default(now())
@@ -41,18 +41,21 @@ model Project {
   updatedAt   DateTime @updatedAt
 
   user        User     @relation(fields: [userId], references: [id])
-
   jobs        Job[]
 }
 
 model Job {
-  id            String   @id @default(uuid())
-  
-  // ★重要: Userとの紐付けを復活（既存データ保護のため任意項目 '?' に設定）
+  // ★重要修正: IDはどちらか一つである必要があります。
+  // 既存データが「数字」なら Int を、「文字列(UUID)」なら String を残してください。
+  // ここでは一般的な Int (autoincrement) を有効にしています。
+  // id        Int      @id @default(autoincrement()) // 数字の方を消す（またはコメントアウト）
+  id        String   @id @default(uuid())           // ★文字列（UUID）の方を有効にする
+
+  // Userとの紐付け
   userId        String?
   user          User?    @relation(fields: [userId], references: [id])
 
-  // Projectとの紐付けは、まだ任意でOK
+  // Projectとの紐付け
   projectId     String?
   project       Project? @relation(fields: [projectId], references: [id])
 
@@ -81,17 +84,26 @@ model Job {
   pptOutput     String?  @db.Text // PPT下書き
   metrics       Json?             // 感情分析
   speakerMap    Json?             // 話者名マッピング
-  translation  String?  @db.Text
   
+  // 既存の単数形フィールド（念のため残す）
+  translation   String?  @db.Text
+
   // --- Others ---
   slideUrl      String?
   errorMessage  String?
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  // ★今回の追加機能★
+  // ① ターゲット言語
+  targetLang    String? @default("Japanese") 
+
+  // ② 翻訳結果のキャッシュ（日・英・タイ全部入り）
+  translations  Json?
 }
 
-// --- NextAuth Models (Googleログインに必須) ---
+// --- NextAuth Models ---
 
 model Account {
   id                 String  @id @default(cuid())
@@ -99,12 +111,12 @@ model Account {
   type               String
   provider           String
   providerAccountId  String
-  refresh_token      String?  @db.Text
-  access_token       String?  @db.Text
+  refresh_token      String? @db.Text
+  access_token       String? @db.Text
   expires_at         Int?
   token_type         String?
   scope              String?
-  id_token           String?  @db.Text
+  id_token           String? @db.Text
   session_state      String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
