@@ -15,8 +15,13 @@ model User {
   email         String    @unique
   emailVerified DateTime?
   image         String?
+  
   plan          UserPlan  @default(FREE)
   gammaCount    Int       @default(0)    // 月間生成数制限用
+  
+  // ★Stripe対応用カラム（復活）
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -45,11 +50,7 @@ model Project {
 }
 
 model Job {
-  // ★重要修正: IDはどちらか一つである必要があります。
-  // 既存データが「数字」なら Int を、「文字列(UUID)」なら String を残してください。
-  // ここでは一般的な Int (autoincrement) を有効にしています。
-  // id        Int      @id @default(autoincrement()) // 数字の方を消す（またはコメントアウト）
-  id        String   @id @default(uuid())           // ★文字列（UUID）の方を有効にする
+  id        String   @id @default(uuid())
 
   // Userとの紐付け
   userId        String?
@@ -80,12 +81,12 @@ model Job {
   shieldOutput  String?  @db.Text
   spearOutput   Json?
   
-  // --- New Features ---
-  pptOutput     String?  @db.Text // PPT下書き
-  metrics       Json?             // 感情分析
-  speakerMap    Json?             // 話者名マッピング
+  // --- New Features (バケツ/PPT対応) ---
+  pptOutput     String?  @db.Text 
+  metrics       Json?             
+  speakerMap    Json?             
   
-  // 既存の単数形フィールド（念のため残す）
+  // 既存フィールド
   translation   String?  @db.Text
 
   // --- Others ---
@@ -95,16 +96,12 @@ model Job {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  // ★今回の追加機能★
-  // ① ターゲット言語
+  // ★翻訳機能
   targetLang    String? @default("Japanese") 
-
-  // ② 翻訳結果のキャッシュ（日・英・タイ全部入り）
   translations  Json?
 }
 
-// --- NextAuth Models ---
-
+// --- NextAuth Models (変更なし) ---
 model Account {
   id                 String  @id @default(cuid())
   userId             String
@@ -141,7 +138,6 @@ model VerificationToken {
 }
 
 // --- Enums ---
-
 enum JobType {
   AUDIO
   VIDEO
