@@ -89,7 +89,7 @@ router.post('/', async (req: Request, res: Response) => {
         userId: targetUserId,
         type: 'AUDIO',
         status: JobStatus.QUEUED,
-        sourceUrl: `gs://sanbou-ai-transcripts/${gcsPath}`,
+        sourceUrl: `gs://sanbou-ai-project-storage/${gcsPath}`,
         security: (securityMode as SecurityMode) || SecurityMode.CONFIDENTIAL,
       }
     });

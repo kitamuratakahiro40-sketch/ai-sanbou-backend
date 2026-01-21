@@ -6,7 +6,7 @@ const storage = new Storage();
 
 // ★重要: バケット名は jobs.ts に書いたものと合わせる必要があります
 // もしGCSのバケット名が違う場合は、ここを書き換えてください
-const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'sanbou-ai-transcripts';
+const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'sanbou-ai-project-storage';
 
 router.post('/signed-url', async (req: Request, res: Response) => {
   try {

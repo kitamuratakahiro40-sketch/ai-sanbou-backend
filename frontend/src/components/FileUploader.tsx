@@ -133,7 +133,14 @@ export default function FileUploader({ onUploadComplete }: FileUploaderProps) {
                 </>
               )}
             </div>
-            <input type="file" accept="audio/*,video/*" className="hidden" onChange={handleFileChange} ref={fileInputRef} />
+            {/* ★ iPhone (.m4a) 対応のために、拡張子を明記します */ }
+<input 
+  type="file" 
+  accept="audio/*, .m4a, .mp3, .wav, .m4v, .mp4, video/*" 
+  className="hidden" 
+  onChange={handleFileChange} 
+  ref={fileInputRef} 
+/>
           </label>
         </div>
         {file && (

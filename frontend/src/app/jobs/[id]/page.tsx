@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
   Trash2, Save, Edit3, FileText, Search, CheckSquare, 
-  Square, RefreshCw, Globe, Download, MonitorPlay, ArrowLeft, Printer 
+  Square, RefreshCw, Globe, Download, MonitorPlay, ArrowLeft, Printer, Loader2 
 } from 'lucide-react';
 import GammaButton from '@/components/GammaButton';
 
@@ -33,17 +33,17 @@ export default function JobDetailPage() {
   // --- State ---
   const [job, setJob] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  
-  // ★変更: タブの並び順変更に合わせてデフォルトをTRANSCRIPT（文字起こし）に変更
   const [activeTab, setActiveTab] = useState<'TRANSCRIPT' | 'BUSINESS' | 'PPT' | 'NARRATIVE'>('TRANSCRIPT');
   
   const [isRequesting, setIsRequesting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
 
+  // ★追加: ボタン連打防止用の「送信済みリスト」
+  const [submittedTypes, setSubmittedTypes] = useState<string[]>([]);
+
   // タイ語要約モード管理
   const [isThaiMode, setIsThaiMode] = useState(false);
-
-  // ★翻訳表示モード管理
+  // 翻訳表示モード管理
   const [showTranslation, setShowTranslation] = useState(true);
 
   // フォーム状態
@@ -90,6 +90,9 @@ export default function JobDetailPage() {
       
       const jobData = data.job || data;
       setJob(jobData);
+
+      // 生成が完了していたら「送信済みリスト」から削除してボタンを復活させるなどの制御も可能ですが、
+      // ここではシンプルに「データがあればボタンを表示しない」制御と連携します。
 
       if (jobData.transcript && segments.length === 0) {
         setSegments(parseTranscriptToSegments(jobData.transcript));
@@ -155,8 +158,11 @@ export default function JobDetailPage() {
     }
   };
 
+  // ★修正: 連打防止ロジックを追加した分析ハンドラー
   const handleAnalyze = async (type: string, extraData?: any) => {
-    if (!job || isRequesting) return;
+    // ガード: データがない、通信中、または既にこのボタンを押している場合は無視
+    if (!job || isRequesting || submittedTypes.includes(type)) return;
+    
     setIsRequesting(true);
     try {
       const payload: any = { type, isThaiMode, ...extraData };
@@ -168,22 +174,28 @@ export default function JobDetailPage() {
           .join('\n');
       }
       
-      // 既存の翻訳ロジック (Narrative/Business用)
       if (type === 'TRANSLATE') {
         payload.targetLang = targetLang;
         payload.sourceKey = activeTab === 'NARRATIVE' ? 'NARRATIVE' : 'BUSINESS';
         payload.sourceText = activeTab === 'NARRATIVE' ? job.narrative : job.shieldOutput;
       }
 
-      await fetch(`${API_BASE}/${id}/analyze`, {
+      const res = await fetch(`${API_BASE}/${id}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         mode: 'cors'
       });
 
-      alert('処理を開始しました！完了までお待ち下さい。');
-      fetchJob();
+      if (res.ok) {
+        // ★成功したら「送信済みリスト」に追加してボタンをロック
+        setSubmittedTypes(prev => [...prev, type]);
+        alert('処理を開始しました！完了までお待ち下さい。');
+        fetchJob();
+      } else {
+        throw new Error('Request failed');
+      }
+
     } catch (error) {
       alert('エラーが発生しました');
     } finally {
@@ -191,7 +203,6 @@ export default function JobDetailPage() {
     }
   };
 
-  // ★追加: PPT専用の翻訳ハンドラー
   const handlePptTranslate = async (lang: 'Japanese' | 'English' | 'Thai') => {
     if (!job || isRequesting) return;
     setIsRequesting(true);
@@ -200,27 +211,21 @@ export default function JobDetailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'TRANSLATE', // Worker側でTRANSLATEアクションとして処理される
+          type: 'TRANSLATE', 
           targetLang: lang,
-          sourceKey: 'PPT_DRAFT', // ★PPT下書きをソースにする合図
-          sourceText: job.pptOutput // 現在の下書きを送る（念のため）
+          sourceKey: 'PPT_DRAFT', 
+          sourceText: job.pptOutput 
         }),
         mode: 'cors'
       });
       alert(`スライド言語を切り替えています... (${lang})`);
-      
-      // 少し待ってからリロード
-      setTimeout(() => {
-        fetchJob();
-      }, 2000);
-      
+      setTimeout(() => { fetchJob(); }, 2000);
     } catch (error) {
       alert('翻訳リクエストに失敗しました');
     } finally {
       setIsRequesting(false);
     }
   };
-
 
   const toggleSelection = (idx: number) => {
     setSelectedIndices(prev => prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]);
@@ -236,13 +241,10 @@ export default function JobDetailPage() {
     return job.translations[key] as string;
   };
 
-  // --- Render Components ---
-
+  // --- Components ---
   const MetricsBar = ({ label, value, color }: { label: string, value: number, color: string }) => (
     <div className="mb-4">
-      <div className="flex justify-between text-xs font-bold text-slate-500 mb-1">
-        <span>{label}</span><span>{value}%</span>
-      </div>
+      <div className="flex justify-between text-xs font-bold text-slate-500 mb-1"><span>{label}</span><span>{value}%</span></div>
       <div className="w-full bg-gray-200 rounded-full h-2.5">
         <div className={`h-2.5 rounded-full ${color}`} style={{ width: `${value}%` }}></div>
       </div>
@@ -263,8 +265,8 @@ export default function JobDetailPage() {
       </select>
       <button 
         onClick={() => handleAnalyze('TRANSLATE')} 
-        disabled={isRequesting}
-        className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded flex items-center gap-1 shadow-sm transition"
+        disabled={isRequesting || submittedTypes.includes('TRANSLATE')}
+        className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded flex items-center gap-1 shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <Globe size={14}/> {isRequesting ? '翻訳中...' : '実行'}
       </button>
@@ -306,13 +308,9 @@ export default function JobDetailPage() {
             </h1>
           </div>
           <div className="flex gap-2">
-            <button 
-              onClick={handlePrint} 
-              className="flex items-center gap-1 text-xs font-bold text-slate-600 hover:bg-slate-100 px-3 py-2 rounded transition"
-            >
+            <button onClick={handlePrint} className="flex items-center gap-1 text-xs font-bold text-slate-600 hover:bg-slate-100 px-3 py-2 rounded transition">
               <Printer size={14} /> 印刷
             </button>
-
             {!isEditing && (
               <button onClick={handleDelete} className="flex items-center gap-1 text-xs text-red-500 hover:bg-red-50 px-3 py-2 rounded">
                 <Trash2 size={14} /> 削除
@@ -333,6 +331,7 @@ export default function JobDetailPage() {
         {/* Editing Mode */}
         {isEditing && (
           <div className="mb-8 space-y-4 bg-white p-6 rounded-xl border border-blue-100 shadow-sm animate-in fade-in print:hidden">
+            {/* (中略) 編集フォームはそのまま維持 */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-slate-400 block mb-1">PROJECT NAME</label>
@@ -353,7 +352,6 @@ export default function JobDetailPage() {
                 />
               </div>
             </div>
-            
             <div>
               <label className="text-xs font-bold text-slate-400 block mb-2">SPEAKER MAPPING</label>
               <div className="flex flex-wrap gap-2 bg-slate-50 p-3 rounded border">
@@ -372,7 +370,6 @@ export default function JobDetailPage() {
                 ))}
               </div>
             </div>
-
             <div>
               <label className="text-xs font-bold text-slate-400 block mb-1">RAW TRANSCRIPT</label>
               <textarea 
@@ -384,7 +381,7 @@ export default function JobDetailPage() {
           </div>
         )}
 
-        {/* ★変更: Tab Navigation（並び順変更） */}
+        {/* Tab Navigation */}
         <div className="flex border-b border-slate-200 mb-6 sticky top-[73px] bg-[#f5f5f7] z-10 pt-2 print:hidden">
           {[
             { id: 'TRANSCRIPT', label: '1. 文字起こし(検索)', icon: Search },
@@ -430,11 +427,11 @@ export default function JobDetailPage() {
                   <span className="text-xs font-bold text-blue-600">{selectedIndices.length}件の発言を選択中</span>
                   <button 
                     onClick={() => handleAnalyze('PARTIAL_SUMMARY')}
-                    disabled={isRequesting}
-                    className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded shadow hover:bg-blue-500 transition flex items-center gap-1"
+                    disabled={isRequesting || submittedTypes.includes('PARTIAL_SUMMARY')}
+                    className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded shadow hover:bg-blue-500 transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isRequesting ? <RefreshCw className="animate-spin" size={12}/> : <FileText size={12}/>} 
-                    選択範囲を要約
+                    {(isRequesting || submittedTypes.includes('PARTIAL_SUMMARY')) ? <Loader2 className="animate-spin" size={12}/> : <FileText size={12}/>} 
+                    {submittedTypes.includes('PARTIAL_SUMMARY') ? '依頼済' : '選択範囲を要約'}
                   </button>
                 </div>
               )}
@@ -467,7 +464,6 @@ export default function JobDetailPage() {
           {/* === 2. BUSINESS TAB === */}
           {activeTab === 'BUSINESS' && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in">
-              {/* 左カラム：分析スコア */}
               <div className="space-y-6 print:hidden">
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
                   <h3 className="text-sm font-bold text-slate-700 mb-4 border-b pb-2">📊 Sentiment Analysis</h3>
@@ -487,7 +483,6 @@ export default function JobDetailPage() {
                 )}
               </div>
 
-              {/* 右カラム：議事録本文 */}
               <div className="lg:col-span-2 space-y-6 print:col-span-3">
                 <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 min-h-[400px] print:shadow-none print:border-none print:p-0">
                    
@@ -496,11 +491,11 @@ export default function JobDetailPage() {
                      {job.shieldOutput && (
                         <button 
                            onClick={() => handleAnalyze('BUSINESS')} 
-                           disabled={isRequesting}
-                           className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded hover:bg-slate-200 transition"
+                           disabled={isRequesting || submittedTypes.includes('BUSINESS')}
+                           className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded hover:bg-slate-200 transition disabled:opacity-50"
                          >
                            <RefreshCw size={12} className={`inline mr-1 ${isRequesting ? 'animate-spin' : ''}`}/> 
-                           {isThaiMode ? 'タイ語で再生成' : '再生成'}
+                           {submittedTypes.includes('BUSINESS') ? '生成待ち...' : (isThaiMode ? 'タイ語で再生成' : '再生成')}
                          </button>
                      )}
                    </div>
@@ -509,36 +504,23 @@ export default function JobDetailPage() {
                      <>
                         {(() => {
                            const savedTranslation = getTranslation('BUSINESS');
-                           
                            if (savedTranslation && showTranslation) {
                              return (
                                <div className="animate-in fade-in">
                                   <div className="bg-indigo-50 text-indigo-800 px-4 py-3 rounded-lg mb-6 text-sm font-bold flex justify-between items-center border border-indigo-100 print:hidden">
                                       <span className="flex items-center gap-2"><Globe size={16}/> 翻訳モード ({targetLang})</span>
-                                      <button 
-                                        onClick={() => setShowTranslation(false)} 
-                                        className="text-xs underline hover:text-indigo-600"
-                                      >
-                                        原文に戻す
-                                      </button>
+                                      <button onClick={() => setShowTranslation(false)} className="text-xs underline hover:text-indigo-600">原文に戻す</button>
                                   </div>
-                                  <div className="prose prose-sm max-w-none whitespace-pre-wrap text-slate-700">
-                                      {savedTranslation}
-                                  </div>
+                                  <div className="prose prose-sm max-w-none whitespace-pre-wrap text-slate-700">{savedTranslation}</div>
                                </div>
                              );
                            } else {
                              return (
                                <div className="prose prose-sm max-w-none whitespace-pre-wrap text-slate-700">
                                   <div className="print:hidden">
-                                    {!savedTranslation ? (
-                                      <TranslateControl />
-                                    ) : (
+                                    {!savedTranslation ? <TranslateControl /> : (
                                       <div className="mb-4 flex justify-end">
-                                        <button 
-                                          onClick={() => setShowTranslation(true)}
-                                          className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded hover:bg-indigo-100 transition flex items-center gap-1"
-                                        >
+                                        <button onClick={() => setShowTranslation(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded hover:bg-indigo-100 transition flex items-center gap-1">
                                           <Globe size={14}/> {targetLang}翻訳を表示
                                         </button>
                                         <div className="scale-90 origin-right ml-2"><TranslateControl /></div>
@@ -554,12 +536,18 @@ export default function JobDetailPage() {
                    ) : (
                      <div className="text-center py-20">
                         <p className="text-slate-400 mb-4">ビジネス議事録はまだ作成されていません</p>
+                        {/* ★修正: 連打防止ボタン */}
                         <button 
                           onClick={() => handleAnalyze('BUSINESS')} 
-                          disabled={isRequesting}
-                          className="bg-emerald-600 text-white px-6 py-2 rounded-full font-bold shadow hover:bg-emerald-700 transition flex items-center gap-2 mx-auto"
+                          disabled={isRequesting || submittedTypes.includes('BUSINESS')}
+                          className={`bg-emerald-600 text-white px-6 py-2 rounded-full font-bold shadow transition flex items-center gap-2 mx-auto ${
+                            (isRequesting || submittedTypes.includes('BUSINESS')) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-emerald-700'
+                          }`}
                         >
-                          <CheckSquare size={18}/> {isThaiMode ? 'タイ語要約を作成 (TH Summary)' : 'ビジネス要約を作成'}
+                          <CheckSquare size={18}/> 
+                          {submittedTypes.includes('BUSINESS') 
+                            ? '✅ 依頼済み（生成待ち...）' 
+                            : (isThaiMode ? 'タイ語要約を作成' : 'ビジネス要約を作成')}
                         </button>
                      </div>
                    )}
@@ -582,56 +570,33 @@ export default function JobDetailPage() {
             </div>
           )}
           
-          {/* === 3. PPT TAB (新機能) === */}
+          {/* === 3. PPT TAB === */}
           {activeTab === 'PPT' && (
             <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 min-h-[500px] animate-in fade-in">
               <div className="mb-6 flex justify-between items-center">
                 <h3 className="font-bold text-lg text-slate-700">PowerPoint Draft (Markdown)</h3>
                 <button 
                   onClick={() => handleAnalyze('PPT')} 
-                  disabled={isRequesting}
-                  className="bg-orange-600 text-white px-4 py-2 rounded text-sm hover:bg-orange-700 flex items-center gap-2"
+                  disabled={isRequesting || submittedTypes.includes('PPT')}
+                  className={`bg-orange-600 text-white px-4 py-2 rounded text-sm flex items-center gap-2 ${
+                    (isRequesting || submittedTypes.includes('PPT')) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-orange-700'
+                  }`}
                 >
-                  <MonitorPlay size={16} /> {pptOutput ? '再生成' : 'スライド構成案を作成'}
+                  <MonitorPlay size={16} /> 
+                  {submittedTypes.includes('PPT') ? '依頼済み...' : (pptOutput ? '再生成' : 'スライド構成案を作成')}
                 </button>
               </div>
               
               {pptOutput ? (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* 左側: Markdownエディタ (2/3) */}
                   <div className="lg:col-span-2 relative group flex flex-col gap-2">
-                    
-                    {/* ★追加: 言語切り替えバー */}
                     <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mb-2">
                       <span className="text-xs font-bold text-gray-500 mr-2">🌏 言語切替:</span>
-                      
-                      <button
-                        onClick={() => handlePptTranslate('Japanese')}
-                        disabled={isRequesting}
-                        className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 shadow-sm transition"
-                      >
-                        🇯🇵 日本語 (元に戻す)
-                      </button>
-
-                      <button
-                        onClick={() => handlePptTranslate('Thai')}
-                        disabled={isRequesting}
-                        className="px-3 py-1.5 text-xs bg-white border border-blue-300 text-blue-700 rounded hover:bg-blue-50 shadow-sm font-bold transition"
-                      >
-                        🇹🇭 タイ語 (翻訳)
-                      </button>
-
-                      <button
-                        onClick={() => handlePptTranslate('English')}
-                        disabled={isRequesting}
-                        className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 shadow-sm transition"
-                      >
-                        🇺🇸 English
-                      </button>
-                      
+                      <button onClick={() => handlePptTranslate('Japanese')} disabled={isRequesting} className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 shadow-sm transition">🇯🇵 日本語</button>
+                      <button onClick={() => handlePptTranslate('Thai')} disabled={isRequesting} className="px-3 py-1.5 text-xs bg-white border border-blue-300 text-blue-700 rounded hover:bg-blue-50 shadow-sm font-bold transition">🇹🇭 タイ語</button>
+                      <button onClick={() => handlePptTranslate('English')} disabled={isRequesting} className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 shadow-sm transition">🇺🇸 English</button>
                       {isRequesting && <span className="text-xs text-blue-500 animate-pulse ml-auto">処理中...</span>}
                     </div>
-
                     <div className="relative h-[500px]">
                         <textarea 
                         className="w-full h-full p-4 bg-slate-50 border rounded font-mono text-sm leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none resize-none"
@@ -646,22 +611,12 @@ export default function JobDetailPage() {
                         </button>
                     </div>
                   </div>
-
-                  {/* 右側: Gamma操作パネル (1/3) */}
                   <div className="space-y-4">
                     <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-xl border border-indigo-100">
-                      <h4 className="font-bold text-indigo-900 mb-2 flex items-center gap-2">
-                        🚀 Export to PowerPoint
-                      </h4>
-                      <p className="text-xs text-indigo-700/80 mb-4 leading-relaxed">
-                        このMarkdown構成案を元に、Gamma AIを使ってデザイン済みのスライド(.pptx)を生成します。
-                      </p>
-                      
-                      {/* Gamma生成ボタン */}
+                      <h4 className="font-bold text-indigo-900 mb-2 flex items-center gap-2">🚀 Export to PowerPoint</h4>
+                      <p className="text-xs text-indigo-700/80 mb-4 leading-relaxed">このMarkdown構成案を元に、Gamma AIを使ってデザイン済みのスライド(.pptx)を生成します。</p>
                       <GammaButton jobId={id} />
-                      
                     </div>
-                    {/* ★変更: 不要なTip文言を削除しました */}
                   </div>
                 </div>
               ) : (
@@ -679,48 +634,30 @@ export default function JobDetailPage() {
                 <>
                   {(() => {
                      const savedTranslation = getTranslation('NARRATIVE');
-                     
                      if (savedTranslation && showTranslation) {
                        return (
                          <div className="animate-in fade-in">
                              <div className="bg-indigo-50 text-indigo-800 px-4 py-3 rounded-lg mb-6 text-sm font-bold flex justify-between items-center border border-indigo-100 print:hidden">
                                  <span className="flex items-center gap-2"><Globe size={16}/> 翻訳モード ({targetLang})</span>
-                                 <button 
-                                   onClick={() => setShowTranslation(false)} 
-                                   className="text-xs underline hover:text-indigo-600"
-                                 >
-                                   原文に戻す
-                                 </button>
+                                 <button onClick={() => setShowTranslation(false)} className="text-xs underline hover:text-indigo-600">原文に戻す</button>
                              </div>
-                             <div className="prose prose-slate max-w-none">
-                                 <div className="whitespace-pre-wrap font-sans text-slate-700 leading-8 text-lg">
-                                     {savedTranslation}
-                                 </div>
-                             </div>
+                             <div className="prose prose-slate max-w-none"><div className="whitespace-pre-wrap font-sans text-slate-700 leading-8 text-lg">{savedTranslation}</div></div>
                          </div>
                        );
                      } else {
                        return (
                          <div className="prose prose-slate max-w-none">
                             <div className="print:hidden">
-                              {!savedTranslation ? (
-                                <TranslateControl />
-                              ) : (
+                              {!savedTranslation ? <TranslateControl /> : (
                                 <div className="mb-4 flex justify-end">
-                                  <button 
-                                    onClick={() => setShowTranslation(true)}
-                                    className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded hover:bg-indigo-100 transition flex items-center gap-1"
-                                  >
+                                  <button onClick={() => setShowTranslation(true)} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded hover:bg-indigo-100 transition flex items-center gap-1">
                                     <Globe size={14}/> {targetLang}翻訳を表示
                                   </button>
                                   <div className="scale-90 origin-right ml-2"><TranslateControl /></div>
                                 </div>
                               )}
                             </div>
-
-                           <div className="whitespace-pre-wrap font-sans text-slate-700 leading-8 text-lg">
-                             {job.narrative}
-                           </div>
+                           <div className="whitespace-pre-wrap font-sans text-slate-700 leading-8 text-lg">{job.narrative}</div>
                          </div>
                        );
                      }
@@ -731,10 +668,12 @@ export default function JobDetailPage() {
                   <p className="mb-4">ナラティブ（物語）はまだ生成されていません</p>
                   <button 
                     onClick={() => handleAnalyze('NARRATIVE')} 
-                    disabled={isRequesting}
-                    className="bg-blue-600 text-white px-6 py-2 rounded-full font-bold hover:bg-blue-700 transition"
+                    disabled={isRequesting || submittedTypes.includes('NARRATIVE')}
+                    className={`bg-blue-600 text-white px-6 py-2 rounded-full font-bold transition ${
+                      (isRequesting || submittedTypes.includes('NARRATIVE')) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'
+                    }`}
                   >
-                    ナラティブ生成を開始
+                    {submittedTypes.includes('NARRATIVE') ? '依頼済み（生成待ち...）' : 'ナラティブ生成を開始'}
                   </button>
                 </div>
               )}
