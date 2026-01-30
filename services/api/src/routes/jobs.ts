@@ -17,21 +17,33 @@ const QUEUE_NAME = 'sanbou-job-queue';
 const jobQueue = new Queue(QUEUE_NAME, { connection });
 
 // ---------------------------------------------------------
-// 1. GET / (一覧取得)
+// 1. GET / (一覧取得) - 軽量カラムのみ取得
 // ---------------------------------------------------------
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { userId } = req.query;
-    
-    // ★修正: userIdがない場合はエラーにする（セキュリティ強化）
+
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
     console.log(`📡 [GET] Fetching jobs for user: ${userId}`);
+    // ★最適化: 一覧表示に必要なカラムのみ取得（transcript等の巨大フィールドを除外）
     const jobs = await prisma.job.findMany({
       where: { userId: String(userId) },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        projectName: true,
+        clientName: true,
+        type: true,
+        status: true,
+        security: true,
+        createdAt: true,
+        updatedAt: true,
+        errorMessage: true
+        // 除外: transcript, rawText, narrative, shieldOutput, pptOutput, translation, translations, spearOutput, metrics, speakerMap
+      }
     });
     return res.json({ jobs });
   } catch (error) {
@@ -41,11 +53,42 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
-// 2. GET /:id (詳細取得)
+// 2. GET /:id (詳細取得) - ?light=true で軽量版
 // ---------------------------------------------------------
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
+    const { light } = req.query;
+
+    // ★最適化: light=true の場合は巨大フィールドを除外（ステータス確認用）
+    if (light === 'true') {
+      const job = await prisma.job.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          userId: true,
+          projectId: true,
+          projectName: true,
+          clientName: true,
+          tags: true,
+          type: true,
+          status: true,
+          security: true,
+          sourceUrl: true,
+          fileName: true,
+          slideUrl: true,
+          errorMessage: true,
+          targetLang: true,
+          createdAt: true,
+          updatedAt: true
+          // 除外: transcript, rawText, narrative, shieldOutput, pptOutput, translation, translations, spearOutput, metrics, speakerMap
+        }
+      });
+      if (!job) return res.status(404).json({ error: 'Job not found' });
+      return res.json({ job });
+    }
+
+    // 通常モード: 全カラム取得（詳細画面用）
     const job = await prisma.job.findUnique({ where: { id } });
     if (!job) return res.status(404).json({ error: 'Job not found' });
     return res.json({ job });
