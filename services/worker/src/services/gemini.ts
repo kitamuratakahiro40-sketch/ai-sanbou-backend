@@ -17,14 +17,14 @@ const prisma = new PrismaClient();
 const storage = new Storage();
 
 // =========================================================
-// 🤖 モデル設定 (Gemini 3 Hybrid Strategy)
+// 🤖 モデル設定 (聖典: 1.5ヶ月稼働実績あり)
 // =========================================================
-const MODEL_FLASH = 'gemini-3-flash-preview';
-const MODEL_PRO = 'gemini-3-pro-preview';
+const MODEL_FLASH = 'gemini-3-flash-preview';  // 文字起こし用
+const MODEL_PRO = 'gemini-3-pro-preview';      // 分析用
 
 // 共通設定
 const PROJECT_ID = process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'sanbou-ai-project';
-const LOCATION = 'global'; 
+const LOCATION = 'global';  // 聖典: globalエンドポイント必須 
 
 // リトライ関数（変更なし）
 async function generateWithRetry(model: any, request: any, label: string) {
@@ -67,42 +67,45 @@ export const geminiProcessor = {
       const vertexAI = new VertexAI({
         project: PROJECT_ID,
         location: LOCATION,
-        apiEndpoint: 'aiplatform.googleapis.com'
+        apiEndpoint: 'aiplatform.googleapis.com'  // 聖典: 明示的に指定
       });
 
       const model = vertexAI.getGenerativeModel({
         model: selectedModelName,
         generationConfig: {
-          temperature: 1.0, // 推論モデル推奨値
-          maxOutputTokens: 65536,
+          temperature: 0.2, // 文字起こし・分析向け低温設定
+          maxOutputTokens: 8192,  // ★修正: 上限8192に変更（65536はサポート外）
           topP: 0.8,
           topK: 40
         }
       });
 
-      const job = await prisma.job.findUniqueOrThrow({ where: { id: jobId } });
+      // ★DB最適化: ステータス更新を先に実行（軽量クエリ）
       await prisma.job.update({ where: { id: jobId }, data: { status: JobStatus.PROCESSING } });
 
       let resultText = "";
 
-      // ファイル準備
-      let filePart = undefined;
-      if (job.sourceUrl && action === 'TRANSCRIBE') {
-        if (job.sourceUrl.startsWith('gs://')) {
+      // =========================================================
+      // CASE 1: 文字起こし (Flash) - 必要なカラムのみ取得
+      // =========================================================
+      if (action === 'TRANSCRIBE') {
+        // ★最適化: sourceUrl のみ取得（transcript等の巨大フィールドは不要）
+        const job = await prisma.job.findUniqueOrThrow({
+          where: { id: jobId },
+          select: { id: true, sourceUrl: true }
+        });
+
+        let filePart = undefined;
+        if (job.sourceUrl && job.sourceUrl.startsWith('gs://')) {
           filePart = {
             fileData: {
-              mimeType: (job as any).mimeType || 'audio/mp3', 
+              mimeType: 'audio/mp3',
               fileUri: job.sourceUrl
             }
           };
           console.log(`[AI] 🎙️ Transcribing with ${selectedModelName}...`);
         }
-      }
 
-      // =========================================================
-      // CASE 1: 文字起こし (Flash) - 正確性・網羅性重視
-      // =========================================================
-      if (action === 'TRANSCRIBE') {
         const prompt = `
 役割：法廷速記官
 タスク：提供された音声データの「完全な逐語録」を作成せよ。
@@ -118,17 +121,22 @@ export const geminiProcessor = {
                 contents: [{ role: 'user', parts: [filePart, { text: prompt }] }]
             }, "Transcription");
 
-            await prisma.job.update({ 
-                where: { id: jobId }, 
-                data: { transcript: resultText, status: JobStatus.COMPLETED } 
+            await prisma.job.update({
+                where: { id: jobId },
+                data: { transcript: resultText, status: JobStatus.COMPLETED }
             });
         }
       }
 
       // =========================================================
-      // CASE 2: ナラティブ要約 (Pro) - 冗長性・表現力重視
+      // CASE 2: ナラティブ要約 (Pro) - 必要なカラムのみ取得
       // =========================================================
       else if (action === 'NARRATIVE') {
+        // ★最適化: transcript, rawText のみ取得
+        const job = await prisma.job.findUniqueOrThrow({
+          where: { id: jobId },
+          select: { id: true, transcript: true, rawText: true }
+        });
         const source = job.transcript || job.rawText || "";
         const prompt = `
 役割：ベストセラー作家
@@ -153,10 +161,14 @@ ${source.substring(0, 100000)}
       }
 
       // =========================================================
-      // CASE 3: ビジネス議事録 (Pro) - 構造化・効率重視
-      // ★ここにタイ語モード (TH-TH) の分岐を追加
+      // CASE 3: ビジネス議事録 (Pro) - 必要なカラムのみ取得
       // =========================================================
       else if (action === 'BUSINESS') {
+        // ★最適化: transcript, rawText のみ取得
+        const job = await prisma.job.findUniqueOrThrow({
+          where: { id: jobId },
+          select: { id: true, transcript: true, rawText: true }
+        });
         const source = job.transcript || job.rawText || "";
         let prompt = "";
 
@@ -214,25 +226,38 @@ ${source.substring(0, 100000)}
       }
 
       // =========================================================
-      // CASE 4: 翻訳 (Pro) - 議事録＆PPT下書き対応
+      // CASE 4: 翻訳 (Pro) - 必要なカラムのみ取得
       // =========================================================
       else if (action === 'TRANSLATE') {
         const targetLang = options.targetLang || 'Japanese';
-        // ソースの切り替え (NARRATIVE, BUSINESS, PPT_DRAFT)
-        const sourceKey = options.sourceKey || 'NARRATIVE'; 
-        
+        const sourceKey = options.sourceKey || 'NARRATIVE';
+
         let sourceText = "";
         let isPPTMode = false;
+        let currentTranslations: any = {};
 
-        // ▼ ソーステキストの取得ロジック
+        // ★最適化: sourceKeyに応じて必要なカラムのみ取得
         if (sourceKey === 'BUSINESS') {
+          const job = await prisma.job.findUniqueOrThrow({
+            where: { id: jobId },
+            select: { id: true, shieldOutput: true, translations: true }
+          });
           sourceText = job.shieldOutput || "";
+          currentTranslations = job.translations || {};
         } else if (sourceKey === 'PPT_DRAFT') {
-          // ★ PPT下書き翻訳モード
-          sourceText = job.pptOutput || ""; 
+          const job = await prisma.job.findUniqueOrThrow({
+            where: { id: jobId },
+            select: { id: true, pptOutput: true }
+          });
+          sourceText = job.pptOutput || "";
           isPPTMode = true;
         } else {
-          sourceText = job.narrative || job.transcript || ""; 
+          const job = await prisma.job.findUniqueOrThrow({
+            where: { id: jobId },
+            select: { id: true, narrative: true, transcript: true, translations: true }
+          });
+          sourceText = job.narrative || job.transcript || "";
+          currentTranslations = job.translations || {};
         }
 
         // ▼ プロンプトの切り替え (PPT用はMarkdown維持を強調)
@@ -258,42 +283,30 @@ ${sourceText.substring(0, 30000)}`;
 
         // ▼ 保存処理の分岐
         if (isPPTMode) {
-            // PPTモードなら、下書き(pptOutput)を直接上書き更新する
-            await prisma.job.update({ 
-                where: { id: jobId }, 
-                data: { 
-                  pptOutput: resultText, // 画面更新用
-                  status: JobStatus.COMPLETED 
-                } 
+            await prisma.job.update({
+                where: { id: jobId },
+                data: { pptOutput: resultText, status: JobStatus.COMPLETED }
             });
         } else {
-            // 通常モードなら、translations JSONにマージ保存
-            const currentTranslations = (job.translations as any) || {};
-            const newKey = `${targetLang}_${sourceKey}`; 
-            
-            const updatedTranslations = {
-              ...currentTranslations,
-              [newKey]: resultText
-            };
-    
-            await prisma.job.update({ 
-                where: { id: jobId }, 
-                data: { 
-                  translations: updatedTranslations,
-                  status: JobStatus.COMPLETED 
-                } 
+            const newKey = `${targetLang}_${sourceKey}`;
+            const updatedTranslations = { ...currentTranslations, [newKey]: resultText };
+            await prisma.job.update({
+                where: { id: jobId },
+                data: { translations: updatedTranslations, status: JobStatus.COMPLETED }
             });
         }
       }
 
       // =========================================================
-      // CASE 5: PPT下書き (Pro) - 構成力重視
+      // CASE 5: PPT下書き (Pro) - 必要なカラムのみ取得
       // =========================================================
       else if (action === 'PPT') {
+         // ★最適化: transcript, rawText, targetLang のみ取得
+         const job = await prisma.job.findUniqueOrThrow({
+           where: { id: jobId },
+           select: { id: true, transcript: true, rawText: true, targetLang: true }
+         });
          const sourceText = job.transcript || job.rawText || "";
-
-         // ★言語設定（デフォルトは日本語に戻しました）
-         // フロントから指定があれば従いますが、基本は日本語で作ります
          const targetLang = job.targetLang || "Japanese"; 
 
          let langInstruction = "";
